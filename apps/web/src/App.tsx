@@ -25,7 +25,7 @@ type GeminiStatus = {
 
 export default function App() {
   const [sessionId, setSessionId] = useState<string>("");
-  const [wsState, setWsState] = useState<"idle" | "connecting" | "open">("idle");
+  const [wsState, setWsState] = useState<"idle" | "connecting" | "open">("connecting");
   const [input, setInput] = useState("");
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [actionPlan, setActionPlan] = useState<Record<string, unknown> | null>(null);
@@ -46,6 +46,9 @@ export default function App() {
   const micStreamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const sessionIdRef = useRef<string>("");
+  const autoStartRef = useRef(false);
+  const closingSessionRef = useRef(false);
 
   const wsUrl = useMemo(() => {
     if (!sessionId) return "";
@@ -61,9 +64,26 @@ export default function App() {
     setTimeline((prev) => [...prev, { role, text }]);
   };
 
+  const requestSessionEnd = (targetSessionId: string, preferBeacon = false) => {
+    const url = `${API_BASE}/session/${targetSessionId}/end`;
+    if (preferBeacon && typeof navigator !== "undefined" && "sendBeacon" in navigator) {
+      try {
+        const sent = navigator.sendBeacon(url, new Blob([], { type: "application/json" }));
+        if (sent) return;
+      } catch {
+        // fall back to keepalive fetch
+      }
+    }
+    void fetch(url, { method: "POST", keepalive: preferBeacon }).catch(() => null);
+  };
+
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [timeline]);
+
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
 
   useEffect(() => {
     const loadHealth = async () => {
@@ -102,7 +122,39 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (autoStartRef.current) return;
+    autoStartRef.current = true;
+    void startSession();
+  }, []);
+
+  useEffect(() => {
+    const handlePageClose = () => {
+      const activeSessionId = sessionIdRef.current;
+      if (!activeSessionId || closingSessionRef.current) return;
+      closingSessionRef.current = true;
+      if (frameTimerRef.current !== null) {
+        window.clearInterval(frameTimerRef.current);
+        frameTimerRef.current = null;
+      }
+      screenStreamRef.current?.getTracks().forEach((t) => t.stop());
+      micStreamRef.current?.getTracks().forEach((t) => t.stop());
+      recorderRef.current?.stop();
+      wsRef.current?.close();
+      wsRef.current = null;
+      requestSessionEnd(activeSessionId, true);
+    };
+
+    window.addEventListener("pagehide", handlePageClose);
+    window.addEventListener("beforeunload", handlePageClose);
+    return () => {
+      window.removeEventListener("pagehide", handlePageClose);
+      window.removeEventListener("beforeunload", handlePageClose);
+    };
+  }, []);
+
   const startSession = async () => {
+    if (sessionIdRef.current || wsRef.current) return;
     try {
       setWsState("connecting");
       const res = await fetch(`${API_BASE}/session/start`, {
@@ -117,6 +169,8 @@ export default function App() {
       const newSessionId = String(data.session_id ?? "");
       if (!newSessionId) throw new Error("Backend returned empty session_id");
       setSessionId(newSessionId);
+      sessionIdRef.current = newSessionId;
+      closingSessionRef.current = false;
       setIsSidebarOpen(true);
       connectWs(newSessionId);
     } catch (error) {
@@ -268,12 +322,15 @@ export default function App() {
   };
 
   const endSession = async () => {
-    if (!sessionId) return;
+    const activeSessionId = sessionIdRef.current;
+    if (!activeSessionId) return;
+    closingSessionRef.current = true;
     if (screenOn) stopScreen();
     if (micOn) stopMic();
     wsRef.current?.close();
     wsRef.current = null;
-    await fetch(`${API_BASE}/session/${sessionId}/end`, { method: "POST" }).catch(() => null);
+    await fetch(`${API_BASE}/session/${activeSessionId}/end`, { method: "POST" }).catch(() => null);
+    sessionIdRef.current = "";
     setSessionId("");
     setWsState("idle");
     setActionPlan(null);
@@ -371,12 +428,16 @@ export default function App() {
                 
                 <div className="flex items-center gap-4">
                     {!sessionId ? (
-                        <button 
-                            onClick={startSession}
-                            className="px-6 py-2 rounded-full bg-white text-black font-medium hover:bg-gray-200 transition-colors shadow-[0_0_20px_rgba(255,255,255,0.15)] glow-border"
-                        >
-                            Start Live Session
-                        </button>
+                        wsState === "idle" ? (
+                          <button
+                              onClick={startSession}
+                              className="px-6 py-2 rounded-full bg-white text-black font-medium hover:bg-gray-200 transition-colors shadow-[0_0_20px_rgba(255,255,255,0.15)] glow-border"
+                          >
+                              Retry Session
+                          </button>
+                        ) : (
+                          <div className="text-sm text-slate-300">Starting session...</div>
+                        )
                     ) : (
                         <div className="flex items-center gap-3">
                            {wsState === 'idle' && (
@@ -404,7 +465,7 @@ export default function App() {
                             <Sparkles size={40} className="text-fuchsia-400 opacity-60" />
                         </div>
                         <h2 className="text-3xl font-medium mb-3">Hello, how can I help?</h2>
-                        <p className="text-slate-400 max-w-md">Start a session and share your screen. Synapse AI can see what you're working on and guide you through solutions.</p>
+                        <p className="text-slate-400 max-w-md">Session starts automatically when you open this page. Share your screen and Synapse AI can guide you through solutions.</p>
                     </motion.div>
                 ) : (
                     timeline.map((item, idx) => (
@@ -447,7 +508,7 @@ export default function App() {
                                 }
                             }}
                             rows={1}
-                            placeholder={wsState === 'open' ? "Ask about what's on your screen..." : sessionId ? "Connect channel to chat..." : "Start a session to interact..."}
+                            placeholder={wsState === 'open' ? "Ask about what's on your screen..." : wsState === "connecting" ? "Starting session..." : "Retry session to continue..."}
                             className="w-full bg-transparent px-6 py-4 outline-none text-[15px] placeholder:text-[#6E6E73] text-white disabled:opacity-50 resize-none overflow-hidden max-h-[150px]"
                             style={{ minHeight: '60px' }}
                         />
