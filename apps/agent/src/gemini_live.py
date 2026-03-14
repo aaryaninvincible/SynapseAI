@@ -255,7 +255,7 @@ class GeminiLiveAdapter:
         }
         
         contents: list[dict[str, Any]] = [
-            {"type": "text", "text": f"{PROMPT}\n\nUser message:\n{user_text}\n\nYou must return valid JSON."}
+            {"type": "text", "text": f"{PROMPT}\n\nUser message:\n{user_text}\n\nCRITICAL: You MUST respond ONLY with a single valid JSON object. Do NOT include any conversational text before or after the JSON. Do NOT wrap in ```json blocks. Just the raw JSON object containing 'spoken_text' and 'action_plan'."}
         ]
         
         if latest_frame and latest_frame.startswith("data:"):
@@ -365,6 +365,22 @@ class GeminiLiveAdapter:
                 return data
         except Exception:
             pass
+        
+        import re
+        try:
+            match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
+            if match:
+                data = json.loads(match.group(1))
+                if isinstance(data, dict):
+                    return data
+            match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
+            if match:
+                data = json.loads(match.group(1))
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            pass
+
         return {
             "spoken_text": cleaned,
             "action_plan": self._default_action_plan(),

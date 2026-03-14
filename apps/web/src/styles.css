@@ -26,9 +26,10 @@
     @apply border-border;
   }
   body, #root {
-    height: 100vh;
+    height: 100dvh;
     width: 100vw;
     margin: 0;
     overflow: hidden;
+    background-color: #0b0c10;
   }
 }

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Mic, MonitorUp, Code, StopCircle, FileText, Send, Paperclip, ChevronRight, Sparkles, Activity, Volume2, VolumeX, MessageSquare, Trash2, LogOut } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { auth, db } from "./firebase";
-import { signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, User } from "firebase/auth";
+import { signInWithRedirect, GoogleAuthProvider, onAuthStateChanged, signOut, User } from "firebase/auth";
 import { collection, query, where, getDocs, setDoc, doc, deleteDoc } from "firebase/firestore";
 
 type ServerEvent = {
@@ -716,7 +716,7 @@ export default function App() {
                             </button>
                         </div>
                     ) : (
-                        <button onClick={() => signInWithPopup(auth, new GoogleAuthProvider())} className="px-3 py-1.5 rounded-full bg-white text-black text-xs sm:text-sm font-bold hover:bg-slate-200 transition whitespace-nowrap">
+                        <button onClick={() => signInWithRedirect(auth, new GoogleAuthProvider())} className="px-3 py-1.5 rounded-full bg-white text-black text-xs sm:text-sm font-bold hover:bg-slate-200 transition whitespace-nowrap">
                             Sign In
                         </button>
                     )}
