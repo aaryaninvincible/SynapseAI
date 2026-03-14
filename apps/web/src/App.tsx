@@ -652,15 +652,11 @@ export default function App() {
         </div>
 
         {/* Main Chat Area */}
-        <main className="flex-1 flex flex-col relative z-10 h-full overflow-hidden transition-all duration-500">
+        <main className="flex-1 flex flex-col relative z-10 min-h-[100svh] overflow-hidden transition-all duration-500">
             {/* Header */}
-            <header className="px-3 sm:px-6 lg:px-8 py-3 sm:py-5 flex items-center justify-between gap-2 border-b border-white/5 bg-[#0b0c10]/70 backdrop-blur-md">
+            <header className="px-3 sm:px-6 lg:px-8 pt-[max(12px,env(safe-area-inset-top))] pb-3 sm:py-5 flex items-center justify-between gap-2 border-b border-white/5 bg-[#0b0c10]/75 backdrop-blur-md">
                 <div className="flex items-center gap-2 sm:gap-3">
-                    <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-gradient-to-tr from-indigo-500 to-fuchsia-500 flex items-center justify-center p-[1px]">
-                        <div className="w-full h-full bg-[#131314] rounded-full flex items-center justify-center">
-                            <Sparkles size={14} className="text-indigo-400" />
-                        </div>
-                    </div>
+                    <img src="/logo.svg" alt="Synapse AI Logo" className="w-8 h-8 rounded-xl object-cover shadow-lg border border-white/20 bg-white/5" />
                     <h1 className="text-lg sm:text-xl font-medium tracking-wide">
                         <span className="gemini-gradient font-bold">Synapse</span>
                         <span className="hidden sm:inline gemini-gradient font-bold ml-1">AI</span>
@@ -748,8 +744,8 @@ export default function App() {
                             animate={{ opacity: 1, y: 0 }}
                             className="flex flex-col items-center justify-center h-full text-center mt-10 sm:mt-16"
                         >
-                            <div className="w-20 h-20 mb-6 rounded-full bg-gradient-to-br from-indigo-500/20 to-fuchsia-500/20 flex items-center justify-center">
-                                <Sparkles size={40} className="text-fuchsia-400 opacity-60" />
+                            <div className="w-20 h-20 mb-6 rounded-full flex items-center justify-center">
+                                <img src="/logo.svg" alt="Synapse AI Logo" className="w-full h-full rounded-xl object-cover shadow-[0_0_30px_rgba(168,85,247,0.3)] border border-white/20 bg-white/5" />
                             </div>
                             <h2 className="text-xl sm:text-2xl md:text-3xl font-medium mb-3">Welcome to Synapse AI</h2>
                             <p className="text-sm sm:text-base text-slate-400 max-w-xl px-4">Hi there. Session is ready in the background. Ask anything, share your screen when needed, and I will help you step by step.</p>
@@ -763,12 +759,12 @@ export default function App() {
                                 className={`flex gap-4 ${item.role === 'user' ? 'justify-end' : 'justify-start'}`}
                             >
                                 {item.role !== 'user' && (
-                                    <div className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center mt-1 bg-gradient-to-tr from-indigo-600 to-fuchsia-600">
-                                        {item.role === 'system' ? <Code size={14} className="text-white" /> : <Sparkles size={16} className="text-white" />}
+                                    <div className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center mt-1 overflow-hidden shadow-lg border border-white/10">
+                                        {item.role === 'system' ? <Code size={14} className="text-white" /> : <img src="/logo.svg" alt="AI" className="w-full h-full object-cover" />}
                                     </div>
                                 )}
                                 
-                                <div className={`max-w-[80%] ${item.role === 'user' ? 'bg-[#282A2C] rounded-3xl rounded-tr-sm px-5 py-3.5' : item.role === 'system' ? 'bg-indigo-900/30 border border-indigo-500/20 text-indigo-200 rounded-2xl px-4 py-2 text-sm' : 'text-slate-200 text-lg leading-relaxed pt-1'}`}>
+                                <div className={`max-w-[80%] break-words whitespace-pre-wrap ${item.role === 'user' ? 'bg-[#282A2C] rounded-3xl rounded-tr-sm px-5 py-3.5' : item.role === 'system' ? 'bg-indigo-900/30 border border-indigo-500/20 text-indigo-200 rounded-2xl px-4 py-2 text-sm' : 'text-slate-200 text-lg leading-relaxed pt-1'}`}>
                                     {item.text}
                                 </div>
                             </motion.div>
@@ -780,8 +776,8 @@ export default function App() {
                             animate={{ opacity: 1, y: 0 }}
                             className="flex gap-4 justify-start"
                         >
-                            <div className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center mt-1 bg-gradient-to-tr from-indigo-600 to-fuchsia-600">
-                                <Sparkles size={16} className="text-white" />
+                            <div className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center mt-1 overflow-hidden shadow-[0_0_15px_rgba(168,85,247,0.4)] border border-white/10">
+                                <img src="/logo.svg" alt="AI" className="w-full h-full object-cover" />
                             </div>
                             
                             <div className="bg-transparent px-2 py-3.5 flex items-center gap-1.5 h-[48px]">
