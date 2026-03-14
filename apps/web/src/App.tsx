@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Mic, MonitorUp, Code, StopCircle, FileText, Send, Paperclip, ChevronRight, Sparkles, Activity, Volume2, VolumeX, MessageSquare, Trash2 } from "lucide-react";
+import { Mic, MonitorUp, Code, StopCircle, FileText, Send, Paperclip, ChevronRight, Sparkles, Activity, Volume2, VolumeX, MessageSquare, Trash2, LogOut } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { auth, db } from "./firebase";
+import { signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, User } from "firebase/auth";
+import { collection, query, where, getDocs, setDoc, doc, deleteDoc } from "firebase/firestore";
 
 type ServerEvent = {
   type: "agent_text_delta" | "agent_action_plan" | "state_update" | "error";
@@ -20,6 +23,7 @@ type ChatSession = {
   preview: string;
   date: string;
   timeline: TimelineItem[];
+  uid?: string;
 };
 
 const API_BASE = import.meta.env.VITE_AGENT_BASE_URL ?? "http://localhost:8000";
@@ -49,6 +53,9 @@ export default function App() {
     keyConfigured: false,
     clientReady: false,
   });
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -91,18 +98,39 @@ export default function App() {
   };
 
   useEffect(() => {
-    const stored = localStorage.getItem("synapse_history");
-    if (stored) {
-      try {
-        setSavedSessions(JSON.parse(stored));
-      } catch (e) {}
-    }
+    const unsub = onAuthStateChanged(auth, async (u) => {
+      setUser(u);
+      if (u) {
+        try {
+          const q = query(collection(db, "history"), where("uid", "==", u.uid));
+          const snap = await getDocs(q);
+          const sessions: ChatSession[] = snap.docs.map(d => d.data() as ChatSession).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+          setSavedSessions(sessions);
+        } catch (e) {
+          console.error("Failed to load history:", e);
+        }
+      } else {
+        setSavedSessions([]); // reset
+      }
+      setAuthLoading(false);
+    });
+
+    const installHandler = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+    window.addEventListener('beforeinstallprompt', installHandler);
+
+    return () => {
+      unsub();
+      window.removeEventListener('beforeinstallprompt', installHandler);
+    };
   }, []);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     
-    if (sessionIdRef.current && timeline.length > 0) {
+    if (sessionIdRef.current && timeline.length > 0 && user) {
       setSavedSessions(prev => {
         const existingId = prev.findIndex(s => s.id === sessionIdRef.current);
         const previewText = timeline.find(t => t.role === 'user')?.text || "New conversation";
@@ -110,7 +138,8 @@ export default function App() {
           id: sessionIdRef.current,
           preview: previewText.substring(0, 45) + (previewText.length > 45 ? "..." : ""),
           date: new Date().toISOString(),
-          timeline: timeline
+          timeline: timeline,
+          uid: user.uid
         };
         const updated = [...prev];
         if (existingId >= 0) {
@@ -118,11 +147,14 @@ export default function App() {
         } else {
           updated.unshift(newSession);
         }
-        localStorage.setItem("synapse_history", JSON.stringify(updated));
+        
+        // save to firestore async
+        setDoc(doc(db, "history", newSession.id), newSession).catch(console.error);
+        
         return updated;
       });
     }
-  }, [timeline]);
+  }, [timeline, user]);
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
@@ -648,6 +680,35 @@ export default function App() {
                     <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 rounded-full border border-white/10 hover:bg-white/10 transition text-slate-300">
                         <Activity size={18} />
                     </button>
+
+                    <div className="w-[1px] h-6 bg-white/10 mx-1"></div>
+
+                    {deferredPrompt && (
+                        <button onClick={async () => {
+                            deferredPrompt.prompt();
+                            const outcome = await deferredPrompt.userChoice;
+                            if (outcome.outcome === 'accepted') {
+                                setDeferredPrompt(null);
+                            }
+                        }} className="px-3 py-1.5 rounded-full bg-fuchsia-500/20 text-fuchsia-300 hover:bg-fuchsia-500/30 transition-colors border border-fuchsia-500/20 text-xs sm:text-sm font-semibold flex items-center gap-1">
+                            Install
+                        </button>
+                    )}
+
+                    {authLoading ? (
+                        <div className="w-6 h-6 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin ml-1"></div>
+                    ) : user ? (
+                        <div className="flex items-center gap-2">
+                            {user.photoURL && <img src={user.photoURL} alt="Avatar" className="w-7 h-7 rounded-full ml-1" />}
+                            <button onClick={() => signOut(auth)} className="hidden sm:flex p-2 flex-shrink-0 rounded-full hover:bg-rose-500/20 text-rose-400 transition" title="Sign Out">
+                                <LogOut size={16} />
+                            </button>
+                        </div>
+                    ) : (
+                        <button onClick={() => signInWithPopup(auth, new GoogleAuthProvider())} className="px-3 py-1.5 rounded-full bg-white text-black text-xs sm:text-sm font-bold hover:bg-slate-200 transition whitespace-nowrap">
+                            Sign In
+                        </button>
+                    )}
                 </div>
             </header>
             <nav className="px-3 sm:px-6 lg:px-8 py-2 border-b border-white/5 bg-[#0f1016]/70 backdrop-blur-md flex items-center justify-between">
@@ -878,8 +939,15 @@ export default function App() {
 
             {activeTab === 'about' && (
                <div className="flex-1 overflow-y-auto w-full max-w-4xl mx-auto px-4 sm:px-6 md:px-8 py-8 sm:py-12 flex flex-col gap-6 text-slate-200">
-                    <h2 className="text-3xl font-bold gemini-gradient">About Aryan</h2>
+                    <div className="bg-[#1E1F20]/80 p-6 sm:p-8 rounded-2xl border border-white/5 shadow-xl mb-6">
+                        <h2 className="text-2xl font-bold gemini-gradient mb-4 flex items-center gap-2"><Sparkles size={24}/> About Synapse AI</h2>
+                        <p className="text-lg text-slate-300 leading-relaxed max-w-3xl">
+                            Synapse AI is a next-generation intelligent copilot powered by the advanced capabilities of Gemini 2.0 Flash Live and OpenRouter. Designed for speed, precision, and multimodal understanding, it can see what's on your screen, hear your voice in real-time, and execute complex action plans seamlessly. Synapse acts as your dedicated digital partner to accelerate your workflows and answer complex queries instantly.
+                        </p>
+                    </div>
+
                     <div className="bg-[#1E1F20]/80 p-6 sm:p-8 rounded-2xl border border-white/5 shadow-xl">
+                        <h2 className="text-2xl font-bold text-fuchsia-300 mb-4 flex items-center gap-2"><Code size={24}/> The Developer</h2>
                         <p className="text-lg text-slate-300 leading-relaxed mb-6">
                             Aryan Raikwar (also known as <strong>Aryan Zone</strong> or <strong>aaryaninvincible</strong>) is an innovative IoT & Full Stack Developer, AI Engineer, and a Tech Content Creator. Passionate about innovation and focusing on solving real-world challenges with cutting-edge technology.
                         </p>
