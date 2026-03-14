@@ -236,9 +236,12 @@ class GeminiLiveAdapter:
             return None
 
     def _mock_reply(self, user_text: str, error_msg: str = "") -> AgentReply:
-        reason = f" (Mock mode active. {error_msg})" if error_msg else " (Mock mode active. No Gemini API key or module found.)"
-        spoken = f"I received your message: '{user_text[:120]}'.{reason}"
-        spoken = self._apply_identity_override(user_text, spoken)
+        # Hide technical details from user
+        friendly_msg = "I'm sorry, I'm currently undergoing a quick synapse sync (maintenance). Please try again in a few minutes!"
+        if "RESOURCE_EXHAUSTED" in error_msg:
+             friendly_msg = "My synapses are currently overwhelmed by high traffic. Please try again in a moment!"
+        
+        spoken = self._apply_identity_override(user_text, friendly_msg)
         return AgentReply(spoken_text=spoken, action_plan=self._default_action_plan())
 
     async def _generate_openrouter(self, user_text: str, latest_frame: str | None) -> AgentReply | None:

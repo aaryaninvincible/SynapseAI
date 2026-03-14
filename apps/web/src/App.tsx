@@ -613,6 +613,16 @@ export default function App() {
                 -webkit-backdrop-filter: blur(24px);
                 border: 1px solid rgba(255, 255, 255, 0.08);
             }
+            .no-scrollbar::-webkit-scrollbar {
+                display: none;
+            }
+            .no-scrollbar {
+                -ms-overflow-style: none;
+                scrollbar-width: none;
+            }
+            @media (max-width: 480px) {
+                .hidden-xs { display: none !important; }
+            }
         `}
         </style>
 
@@ -645,14 +655,15 @@ export default function App() {
         <main className="flex-1 flex flex-col relative z-10 h-full overflow-hidden transition-all duration-500">
             {/* Header */}
             <header className="px-3 sm:px-6 lg:px-8 py-3 sm:py-5 flex items-center justify-between gap-2 border-b border-white/5 bg-[#0b0c10]/70 backdrop-blur-md">
-                <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-500 to-fuchsia-500 flex items-center justify-center p-[1px]">
+                <div className="flex items-center gap-2 sm:gap-3">
+                    <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-gradient-to-tr from-indigo-500 to-fuchsia-500 flex items-center justify-center p-[1px]">
                         <div className="w-full h-full bg-[#131314] rounded-full flex items-center justify-center">
-                            <Sparkles size={16} className="text-indigo-400" />
+                            <Sparkles size={14} className="text-indigo-400" />
                         </div>
                     </div>
-                    <h1 className="text-xl font-medium tracking-wide">
-                        <span className="gemini-gradient font-bold">Synapse AI</span>
+                    <h1 className="text-lg sm:text-xl font-medium tracking-wide">
+                        <span className="gemini-gradient font-bold">Synapse</span>
+                        <span className="hidden sm:inline gemini-gradient font-bold ml-1">AI</span>
                     </h1>
                 </div>
                 
@@ -665,11 +676,11 @@ export default function App() {
                           window.speechSynthesis.cancel();
                         }
                       }}
-                      className={`px-3 py-2 rounded-full border text-xs sm:text-sm transition ${speechOn ? "border-emerald-400/40 text-emerald-300 bg-emerald-500/10" : "border-white/20 text-slate-300 hover:bg-white/10"}`}
+                      className={`px-2.5 sm:px-3 py-2 rounded-full border text-xs sm:text-sm transition ${speechOn ? "border-emerald-400/40 text-emerald-300 bg-emerald-500/10" : "border-white/20 text-slate-300 hover:bg-white/10"}`}
                     >
                       <span className="inline-flex items-center gap-1.5">
-                        {speechOn ? <Volume2 size={15} /> : <VolumeX size={15} />}
-                        Voice {speechOn ? "On" : "Off"}
+                        {speechOn ? <Volume2 size={14} /> : <VolumeX size={14} />}
+                        <span className="hidden-xs">Voice {speechOn ? "On" : "Off"}</span>
                       </span>
                     </button>
                     {wsState === "idle" && (
@@ -711,18 +722,18 @@ export default function App() {
                     )}
                 </div>
             </header>
-            <nav className="px-3 sm:px-6 lg:px-8 py-2 border-b border-white/5 bg-[#0f1016]/70 backdrop-blur-md flex items-center justify-between">
-              <div className="flex items-center gap-2 overflow-x-auto whitespace-nowrap text-xs sm:text-sm text-slate-300 scrollbar-thin">
-                <button onClick={() => setActiveTab("home")} className={`px-3 py-1.5 rounded-full border transition-colors ${activeTab === 'home' ? 'bg-white/10 border-white/20 text-white' : 'border-white/10 hover:bg-white/10'}`}>Home</button>
-                <button onClick={() => setActiveTab("history")} className={`px-3 py-1.5 rounded-full border transition-colors ${activeTab === 'history' ? 'bg-white/10 border-white/20 text-white' : 'border-white/10 hover:bg-white/10'}`}>History</button>
-                <button onClick={() => setActiveTab("features")} className={`px-3 py-1.5 rounded-full border transition-colors ${activeTab === 'features' ? 'bg-white/10 border-white/20 text-white' : 'border-white/10 hover:bg-white/10'}`}>Features</button>
-                <button onClick={() => setActiveTab("about")} className={`px-3 py-1.5 rounded-full border transition-colors ${activeTab === 'about' ? 'bg-white/10 border-white/20 text-white' : 'border-white/10 hover:bg-white/10'}`}>About</button>
+            <nav className="px-2 sm:px-6 lg:px-8 py-2 border-b border-white/5 bg-[#0f1016]/70 backdrop-blur-md flex items-center justify-between gap-1">
+              <div className="flex items-center gap-1.5 overflow-x-auto whitespace-nowrap text-xs sm:text-sm text-slate-300 scrollbar-none no-scrollbar py-0.5">
+                <button onClick={() => setActiveTab("home")} className={`px-2.5 py-1.5 rounded-full border transition-colors ${activeTab === 'home' ? 'bg-white/10 border-white/20 text-white' : 'border-white/10 hover:bg-white/10'}`}>Home</button>
+                <button onClick={() => setActiveTab("history")} className={`px-2.5 py-1.5 rounded-full border transition-colors ${activeTab === 'history' ? 'bg-white/10 border-white/20 text-white' : 'border-white/10 hover:bg-white/10'}`}>History</button>
+                <button onClick={() => setActiveTab("features")} className={`px-2.5 py-1.5 rounded-full border transition-colors ${activeTab === 'features' ? 'bg-white/10 border-white/20 text-white' : 'border-white/10 hover:bg-white/10'}`}>Features</button>
+                <button onClick={() => setActiveTab("about")} className={`px-2.5 py-1.5 rounded-full border transition-colors ${activeTab === 'about' ? 'bg-white/10 border-white/20 text-white' : 'border-white/10 hover:bg-white/10'}`}>About</button>
               </div>
               <button 
                 onClick={newChat} 
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm rounded-full bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 transition-colors border border-indigo-500/20 whitespace-nowrap ml-2"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm rounded-full bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 transition-colors border border-indigo-500/20 whitespace-nowrap"
               >
-                <MessageSquare size={14} /> <span className="hidden sm:inline">New Chat</span>
+                <MessageSquare size={14} /> <span className="hidden-xs">New Chat</span>
               </button>
             </nav>
 
@@ -740,8 +751,8 @@ export default function App() {
                             <div className="w-20 h-20 mb-6 rounded-full bg-gradient-to-br from-indigo-500/20 to-fuchsia-500/20 flex items-center justify-center">
                                 <Sparkles size={40} className="text-fuchsia-400 opacity-60" />
                             </div>
-                            <h2 className="text-2xl sm:text-3xl font-medium mb-3">Welcome to Synapse AI</h2>
-                            <p className="text-slate-400 max-w-xl px-4">Hi there. Session is ready in the background. Ask anything, share your screen when needed, and I will help you step by step.</p>
+                            <h2 className="text-xl sm:text-2xl md:text-3xl font-medium mb-3">Welcome to Synapse AI</h2>
+                            <p className="text-sm sm:text-base text-slate-400 max-w-xl px-4">Hi there. Session is ready in the background. Ask anything, share your screen when needed, and I will help you step by step.</p>
                         </motion.div>
                     ) : (
                         timeline.map((item, idx) => (
