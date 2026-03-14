@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Mic, MonitorUp, Code, StopCircle, FileText, Send, Paperclip, ChevronRight, Sparkles, Activity, Volume2, VolumeX } from "lucide-react";
+import { Mic, MonitorUp, Code, StopCircle, FileText, Send, Paperclip, ChevronRight, Sparkles, Activity, Volume2, VolumeX, MessageSquare, Trash2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 type ServerEvent = {
@@ -13,6 +13,13 @@ type ActionStep = {
   target?: string;
   text?: string;
   bbox?: [number, number, number, number];
+};
+
+type ChatSession = {
+  id: string;
+  preview: string;
+  date: string;
+  timeline: TimelineItem[];
 };
 
 const API_BASE = import.meta.env.VITE_AGENT_BASE_URL ?? "http://localhost:8000";
@@ -33,8 +40,9 @@ export default function App() {
   const [micOn, setMicOn] = useState(false);
   const [speechOn, setSpeechOn] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<"home" | "features" | "about">("home");
+  const [activeTab, setActiveTab] = useState<"home" | "features" | "about" | "history">("home");
   const [isThinking, setIsThinking] = useState(false);
+  const [savedSessions, setSavedSessions] = useState<ChatSession[]>([]);
   const [geminiStatus, setGeminiStatus] = useState<GeminiStatus>({
     backendUp: false,
     mode: "unknown",
@@ -83,7 +91,37 @@ export default function App() {
   };
 
   useEffect(() => {
+    const stored = localStorage.getItem("synapse_history");
+    if (stored) {
+      try {
+        setSavedSessions(JSON.parse(stored));
+      } catch (e) {}
+    }
+  }, []);
+
+  useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    
+    if (sessionIdRef.current && timeline.length > 0) {
+      setSavedSessions(prev => {
+        const existingId = prev.findIndex(s => s.id === sessionIdRef.current);
+        const previewText = timeline.find(t => t.role === 'user')?.text || "New conversation";
+        const newSession: ChatSession = {
+          id: sessionIdRef.current,
+          preview: previewText.substring(0, 45) + (previewText.length > 45 ? "..." : ""),
+          date: new Date().toISOString(),
+          timeline: timeline
+        };
+        const updated = [...prev];
+        if (existingId >= 0) {
+          updated[existingId] = newSession;
+        } else {
+          updated.unshift(newSession);
+        }
+        localStorage.setItem("synapse_history", JSON.stringify(updated));
+        return updated;
+      });
+    }
   }, [timeline]);
 
   useEffect(() => {
@@ -318,8 +356,10 @@ export default function App() {
     if (
       normalized.includes("who build") ||
       normalized.includes("who built") ||
-      normalized.includes("developer") ||
-      normalized.includes("made you")
+      normalized.includes("who developed") ||
+      normalized.includes("who is your developer") ||
+      normalized.includes("who made you") ||
+      normalized.includes("who created you")
     ) {
       const creatorLine = "Built by Aryan.";
       append("agent", creatorLine);
@@ -444,6 +484,55 @@ export default function App() {
     setIsSidebarOpen(false);
   };
 
+  const newChat = async () => {
+    if (sessionIdRef.current) {
+        await fetch(`${API_BASE}/session/${sessionIdRef.current}/end`, { method: "POST" }).catch(() => null);
+    }
+    if (screenOn) stopScreen();
+    if (micOn) stopMic();
+    wsRef.current?.close();
+    wsRef.current = null;
+    sessionIdRef.current = "";
+    setSessionId("");
+    setWsState("idle");
+    setIsThinking(false);
+    setActionPlan(null);
+    setTimeline([]);
+    setActiveTab("home");
+    autoStartRef.current = false; // Reset to allow starting session
+    void startSession();
+  };
+
+  const loadSession = async (session: ChatSession) => {
+    if (sessionIdRef.current && sessionIdRef.current !== session.id) {
+        await fetch(`${API_BASE}/session/${sessionIdRef.current}/end`, { method: "POST" }).catch(() => null);
+    }
+    if (screenOn) stopScreen();
+    if (micOn) stopMic();
+    wsRef.current?.close();
+    wsRef.current = null;
+    
+    setTimeline(session.timeline);
+    setSessionId(session.id);
+    sessionIdRef.current = session.id;
+    setWsState("idle");
+    setIsThinking(false);
+    setActionPlan(null);
+    setActiveTab("home");
+  };
+
+  const deleteSession = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    setSavedSessions(prev => {
+      const updated = prev.filter(s => s.id !== id);
+      localStorage.setItem("synapse_history", JSON.stringify(updated));
+      return updated;
+    });
+    if (id === sessionIdRef.current) {
+        newChat();
+    }
+  };
+
   const actionSteps = (actionPlan?.steps as ActionStep[] | undefined) ?? [];
 
   return (
@@ -561,15 +650,23 @@ export default function App() {
                     </button>
                 </div>
             </header>
-            <nav className="px-3 sm:px-6 lg:px-8 py-2 border-b border-white/5 bg-[#0f1016]/70 backdrop-blur-md">
+            <nav className="px-3 sm:px-6 lg:px-8 py-2 border-b border-white/5 bg-[#0f1016]/70 backdrop-blur-md flex items-center justify-between">
               <div className="flex items-center gap-2 overflow-x-auto whitespace-nowrap text-xs sm:text-sm text-slate-300 scrollbar-thin">
                 <button onClick={() => setActiveTab("home")} className={`px-3 py-1.5 rounded-full border transition-colors ${activeTab === 'home' ? 'bg-white/10 border-white/20 text-white' : 'border-white/10 hover:bg-white/10'}`}>Home</button>
+                <button onClick={() => setActiveTab("history")} className={`px-3 py-1.5 rounded-full border transition-colors ${activeTab === 'history' ? 'bg-white/10 border-white/20 text-white' : 'border-white/10 hover:bg-white/10'}`}>History</button>
                 <button onClick={() => setActiveTab("features")} className={`px-3 py-1.5 rounded-full border transition-colors ${activeTab === 'features' ? 'bg-white/10 border-white/20 text-white' : 'border-white/10 hover:bg-white/10'}`}>Features</button>
                 <button onClick={() => setActiveTab("about")} className={`px-3 py-1.5 rounded-full border transition-colors ${activeTab === 'about' ? 'bg-white/10 border-white/20 text-white' : 'border-white/10 hover:bg-white/10'}`}>About</button>
               </div>
+              <button 
+                onClick={newChat} 
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm rounded-full bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 transition-colors border border-indigo-500/20 whitespace-nowrap ml-2"
+              >
+                <MessageSquare size={14} /> <span className="hidden sm:inline">New Chat</span>
+              </button>
             </nav>
 
             {activeTab === 'home' && (
+
               <>
                 {/* Chat History */}
                 <div className="flex-1 overflow-y-auto w-full max-w-5xl mx-auto px-3 sm:px-6 md:px-8 pt-4 sm:pt-6 pb-6 flex flex-col gap-6 scroll-smooth">
@@ -713,6 +810,46 @@ export default function App() {
                     </div>
                 </div>
               </>
+            )}
+
+            {activeTab === 'history' && (
+               <div className="flex-1 overflow-y-auto w-full max-w-5xl mx-auto px-4 sm:px-6 md:px-8 py-8 sm:py-12 flex flex-col gap-6 text-slate-200">
+                    <h2 className="text-3xl font-bold gemini-gradient">Past Conversations</h2>
+                    {savedSessions.length === 0 ? (
+                        <div className="text-center py-12 text-slate-500 bg-[#1E1F20]/50 rounded-2xl border border-white/5">
+                            <MessageSquare size={48} className="mx-auto mb-4 opacity-50" />
+                            <p>No past conversations found.</p>
+                        </div>
+                    ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-2">
+                            {savedSessions.map((s) => (
+                                <div 
+                                    key={s.id}
+                                    onClick={() => loadSession(s)}
+                                    className="bg-[#1E1F20]/80 p-5 rounded-2xl border border-white/5 hover:border-indigo-500/40 hover:bg-[#1E1F20] transition-all cursor-pointer flex flex-col gap-3 group relative"
+                                >
+                                    <div className="flex items-start justify-between">
+                                        <div className="w-8 h-8 rounded-full bg-indigo-500/20 flex items-center justify-center shrink-0">
+                                            <MessageSquare size={14} className="text-indigo-400" />
+                                        </div>
+                                        <button 
+                                            onClick={(e) => deleteSession(e, s.id)} 
+                                            className="p-1.5 rounded-full hover:bg-rose-500/20 text-slate-500 hover:text-rose-400 transition-colors opacity-0 group-hover:opacity-100"
+                                            title="Delete Chat"
+                                        >
+                                            <Trash2 size={14} />
+                                        </button>
+                                    </div>
+                                    <div className="flex-1">
+                                        <h3 className="text-sm font-semibold text-slate-200 line-clamp-2 leading-tight">"{s.preview}"</h3>
+                                        <p className="text-xs text-slate-500 mt-2">{new Date(s.date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</p>
+                                    </div>
+                                    <div className="absolute top-0 right-0 w-2 h-2 rounded-full bg-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity -mt-1 -mr-1 blur-[2px]"></div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+               </div>
             )}
 
             {activeTab === 'features' && (

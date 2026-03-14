@@ -32,7 +32,7 @@ class GeminiLiveAdapter:
 
     async def generate(self, session_id: str, user_text: str, latest_frame: str | None = None) -> AgentReply:
         if not self._client:
-            return self._mock_reply(user_text)
+            return self._mock_reply(user_text, "Gemini client not initialized. Check your GOOGLE_API_KEY inside apps/agent/.env.")
 
         live_session = await self._ensure_live_session(session_id)
         if live_session:
@@ -103,8 +103,9 @@ class GeminiLiveAdapter:
                 spoken_text=spoken_text,
                 action_plan=data.get("action_plan", self._default_action_plan()),
             )
-        except Exception:
-            return self._mock_reply(user_text)
+        except Exception as e:
+            print("Generate exception:", e)
+            return self._mock_reply(user_text, str(e))
 
     async def send_video_frame(self, session_id: str, frame_data_url: str) -> bool:
         live_session = await self._ensure_live_session(session_id)
@@ -209,8 +210,9 @@ class GeminiLiveAdapter:
         except Exception:
             return None
 
-    def _mock_reply(self, user_text: str) -> AgentReply:
-        spoken = f"I got your request: '{user_text[:120]}'. First, let's verify required fields and retry."
+    def _mock_reply(self, user_text: str, error_msg: str = "") -> AgentReply:
+        reason = f" (Mock mode active. {error_msg})" if error_msg else " (Mock mode active. No Gemini API key or module found.)"
+        spoken = f"I received your message: '{user_text[:120]}'.{reason}"
         spoken = self._apply_identity_override(user_text, spoken)
         return AgentReply(spoken_text=spoken, action_plan=self._default_action_plan())
 
