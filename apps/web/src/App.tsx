@@ -23,6 +23,7 @@ export default function App() {
   const [actionPlan, setActionPlan] = useState<Record<string, unknown> | null>(null);
   const [screenOn, setScreenOn] = useState(false);
   const [micOn, setMicOn] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -203,6 +204,53 @@ export default function App() {
     append("system", "Session ended.");
   };
 
+  const runQuickAction = async (action: string) => {
+    if (action === "session") {
+      if (!sessionId) await startSession();
+      return;
+    }
+    if (action === "connect") {
+      connectWs();
+      return;
+    }
+    if (action === "screen") {
+      if (screenOn) stopScreen();
+      else await startScreen();
+      return;
+    }
+    if (action === "mic") {
+      if (micOn) stopMic();
+      else await startMic();
+      return;
+    }
+    if (action === "interrupt") {
+      interrupt();
+      return;
+    }
+    if (action === "end") {
+      await endSession();
+    }
+  };
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const typing =
+        target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
+      if (typing) return;
+
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen((prev) => !prev);
+      }
+      if (event.key === "Escape") {
+        setPaletteOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   const actionSteps = (actionPlan?.steps as ActionStep[] | undefined) ?? [];
   const wsBadge = wsState === "open" ? "Connected" : wsState === "connecting" ? "Connecting" : "Offline";
   const sessionBadge = sessionId ? `Active ${sessionId.slice(0, 8)}` : "No Session";
@@ -310,6 +358,42 @@ export default function App() {
           </details>
         </aside>
       </section>
+
+      <button className="paletteFab" onClick={() => setPaletteOpen(true)}>
+        Quick Actions
+        <span>Ctrl/Cmd + K</span>
+      </button>
+
+      {paletteOpen && (
+        <div className="paletteBackdrop" onClick={() => setPaletteOpen(false)}>
+          <div className="palette glassCard" onClick={(e) => e.stopPropagation()}>
+            <div className="paletteHead">
+              <h3>Command Palette</h3>
+              <span>Press Esc to close</span>
+            </div>
+            <div className="paletteList">
+              <button onClick={() => runQuickAction("session")} disabled={!!sessionId}>
+                Start Session
+              </button>
+              <button onClick={() => runQuickAction("connect")} disabled={!sessionId || wsState === "open"}>
+                Connect Live Channel
+              </button>
+              <button onClick={() => runQuickAction("screen")} disabled={wsState !== "open"}>
+                {screenOn ? "Stop Screen Share" : "Start Screen Share"}
+              </button>
+              <button onClick={() => runQuickAction("mic")} disabled={wsState !== "open"}>
+                {micOn ? "Stop Mic Stream" : "Start Mic Stream"}
+              </button>
+              <button onClick={() => runQuickAction("interrupt")} disabled={wsState !== "open"}>
+                Interrupt
+              </button>
+              <button className="danger" onClick={() => runQuickAction("end")} disabled={!sessionId}>
+                End Session
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <video ref={videoRef} style={{ display: "none" }} playsInline muted />
     </main>
