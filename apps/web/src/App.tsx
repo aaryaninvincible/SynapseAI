@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Mic, Speech, MonitorUp, PhoneOff, Code, StopCircle, Play, FileText, Send, Paperclip, ChevronRight, Sparkles, Activity } from "lucide-react";
+import { Mic, MonitorUp, Code, StopCircle, FileText, Send, Paperclip, ChevronRight, Sparkles, Activity, Volume2, VolumeX, Menu } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 type ServerEvent = {
@@ -31,7 +31,9 @@ export default function App() {
   const [actionPlan, setActionPlan] = useState<Record<string, unknown> | null>(null);
   const [screenOn, setScreenOn] = useState(false);
   const [micOn, setMicOn] = useState(false);
+  const [speechOn, setSpeechOn] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [geminiStatus, setGeminiStatus] = useState<GeminiStatus>({
     backendUp: false,
     mode: "unknown",
@@ -49,6 +51,8 @@ export default function App() {
   const sessionIdRef = useRef<string>("");
   const autoStartRef = useRef(false);
   const closingSessionRef = useRef(false);
+  const particleCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const speechOnRef = useRef(false);
 
   const wsUrl = useMemo(() => {
     if (!sessionId) return "";
@@ -86,6 +90,10 @@ export default function App() {
   }, [sessionId]);
 
   useEffect(() => {
+    speechOnRef.current = speechOn;
+  }, [speechOn]);
+
+  useEffect(() => {
     const loadHealth = async () => {
       try {
         const res = await fetch(`${API_BASE}/health`);
@@ -119,6 +127,85 @@ export default function App() {
       recorderRef.current?.stop();
       wsRef.current?.close();
       window.speechSynthesis.cancel();
+    };
+  }, []);
+
+  useEffect(() => {
+    const canvas = particleCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    let raf = 0;
+    let width = 0;
+    let height = 0;
+    const pointer = { x: -9999, y: -9999 };
+    const particleCount = 48;
+    const particles = Array.from({ length: particleCount }, () => ({
+      x: Math.random(),
+      y: Math.random(),
+      vx: (Math.random() - 0.5) * 0.0009,
+      vy: (Math.random() - 0.5) * 0.0009,
+      r: 1 + Math.random() * 2.2,
+    }));
+
+    const resize = () => {
+      const rect = canvas.getBoundingClientRect();
+      width = Math.max(1, Math.floor(rect.width));
+      height = Math.max(1, Math.floor(rect.height));
+      canvas.width = width;
+      canvas.height = height;
+    };
+
+    const onMove = (e: PointerEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      pointer.x = e.clientX - rect.left;
+      pointer.y = e.clientY - rect.top;
+    };
+    const onLeave = () => {
+      pointer.x = -9999;
+      pointer.y = -9999;
+    };
+
+    const step = () => {
+      ctx.clearRect(0, 0, width, height);
+      for (const p of particles) {
+        p.x += p.vx;
+        p.y += p.vy;
+        if (p.x <= 0 || p.x >= 1) p.vx *= -1;
+        if (p.y <= 0 || p.y >= 1) p.vy *= -1;
+
+        const px = p.x * width;
+        const py = p.y * height;
+        const dx = px - pointer.x;
+        const dy = py - pointer.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < 17000 && d2 > 0.01) {
+          const force = 0.000015;
+          p.vx += (dx / d2) * force * width;
+          p.vy += (dy / d2) * force * height;
+          p.vx = Math.max(-0.002, Math.min(0.002, p.vx));
+          p.vy = Math.max(-0.002, Math.min(0.002, p.vy));
+        }
+
+        ctx.beginPath();
+        ctx.fillStyle = "rgba(168,194,255,0.55)";
+        ctx.arc(px, py, p.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      raf = window.requestAnimationFrame(step);
+    };
+
+    resize();
+    step();
+    window.addEventListener("resize", resize);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerleave", onLeave);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.removeEventListener("resize", resize);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerleave", onLeave);
     };
   }, []);
 
@@ -171,7 +258,6 @@ export default function App() {
       setSessionId(newSessionId);
       sessionIdRef.current = newSessionId;
       closingSessionRef.current = false;
-      setIsSidebarOpen(true);
       connectWs(newSessionId);
     } catch (error) {
       setWsState("idle");
@@ -187,22 +273,20 @@ export default function App() {
     wsRef.current = ws;
     ws.onopen = () => {
       setWsState("open");
-      append("system", "WebSocket connected. You can now chat or share your screen.");
     };
     ws.onerror = () => {
-      append("system", "WebSocket error. Check backend URL/CORS and try reconnecting.");
+      append("system", "Connection issue. Trying again may help.");
     };
     ws.onclose = () => {
       wsRef.current = null;
       setWsState("idle");
-      append("system", "WebSocket closed.");
     };
     ws.onmessage = (e) => {
       const event: ServerEvent = JSON.parse(e.data);
       if (event.type === "agent_text_delta") {
         const text = String(event.payload.text ?? "");
         append("agent", text);
-        if ("speechSynthesis" in window && text) {
+        if (speechOnRef.current && "speechSynthesis" in window && text) {
           window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
         }
       } else if (event.type === "agent_action_plan") {
@@ -210,7 +294,7 @@ export default function App() {
       } else if (event.type === "state_update") {
         const status = String(event.payload.status ?? "updated");
         if (status === "interrupted") {
-          append("system", "State: interrupted");
+          append("system", "Interrupted");
         }
       } else if (event.type === "error") {
         append("system", `Error: ${String(event.payload.message ?? "unknown")}`);
@@ -225,8 +309,24 @@ export default function App() {
 
   const sendText = () => {
     if (!input.trim()) return;
-    append("user", input.trim());
-    sendEvent("user_text", { text: input.trim() });
+    const text = input.trim();
+    append("user", text);
+    const normalized = text.toLowerCase();
+    if (
+      normalized.includes("who build") ||
+      normalized.includes("who built") ||
+      normalized.includes("developer") ||
+      normalized.includes("made you")
+    ) {
+      const creatorLine = "Mr aryan is my developer, you can find him on instagram aaryaninvincible.";
+      append("agent", creatorLine);
+      if (speechOnRef.current && "speechSynthesis" in window) {
+        window.speechSynthesis.speak(new SpeechSynthesisUtterance(creatorLine));
+      }
+      setInput("");
+      return;
+    }
+    sendEvent("user_text", { text });
     setInput("");
   };
 
@@ -391,6 +491,7 @@ export default function App() {
 
         {/* Ambient Background Effects */}
         <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
+            <canvas ref={particleCanvasRef} className="absolute inset-0 w-full h-full opacity-70" />
             <motion.div 
               animate={{ 
                 rotate: [0, 360],
@@ -414,7 +515,7 @@ export default function App() {
         {/* Main Chat Area */}
         <main className="flex-1 flex flex-col relative z-10 h-full transition-all duration-500">
             {/* Header */}
-            <header className="px-8 py-5 flex items-center justify-between">
+            <header className="px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex items-center justify-between border-b border-white/5 bg-[#0b0c10]/70 backdrop-blur-md">
                 <div className="flex items-center gap-3">
                     <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-500 to-fuchsia-500 flex items-center justify-center p-[1px]">
                         <div className="w-full h-full bg-[#131314] rounded-full flex items-center justify-center">
@@ -426,46 +527,69 @@ export default function App() {
                     </h1>
                 </div>
                 
-                <div className="flex items-center gap-4">
-                    {!sessionId ? (
-                        wsState === "idle" ? (
-                          <button
-                              onClick={startSession}
-                              className="px-6 py-2 rounded-full bg-white text-black font-medium hover:bg-gray-200 transition-colors shadow-[0_0_20px_rgba(255,255,255,0.15)] glow-border"
-                          >
-                              Retry Session
-                          </button>
-                        ) : (
-                          <div className="text-sm text-slate-300">Starting session...</div>
-                        )
-                    ) : (
-                        <div className="flex items-center gap-3">
-                           {wsState === 'idle' && (
-                                <button onClick={() => connectWs()} className="text-sm px-4 py-1.5 rounded-full border border-white/20 hover:bg-white/10 transition">
-                                    Connect Channel
-                                </button>
-                           )}
-                           <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 rounded-full border border-white/10 hover:bg-white/10 transition text-slate-400">
-                                <Activity size={18} />
-                           </button>
-                        </div>
+                <div className="hidden md:flex items-center gap-3 text-sm text-slate-300">
+                    <button className="hover:text-white transition-colors">Home</button>
+                    <button className="hover:text-white transition-colors">Features</button>
+                    <button className="hover:text-white transition-colors">About</button>
+                </div>
+
+                <div className="flex items-center gap-2 sm:gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSpeechOn((prev) => !prev);
+                        if (speechOnRef.current) {
+                          window.speechSynthesis.cancel();
+                        }
+                      }}
+                      className={`px-3 py-2 rounded-full border text-xs sm:text-sm transition ${speechOn ? "border-emerald-400/40 text-emerald-300 bg-emerald-500/10" : "border-white/20 text-slate-300 hover:bg-white/10"}`}
+                    >
+                      <span className="inline-flex items-center gap-1.5">
+                        {speechOn ? <Volume2 size={15} /> : <VolumeX size={15} />}
+                        Voice {speechOn ? "On" : "Off"}
+                      </span>
+                    </button>
+                    {wsState === "idle" && (
+                      <button onClick={() => connectWs()} className="hidden sm:inline text-sm px-4 py-1.5 rounded-full border border-white/20 hover:bg-white/10 transition">
+                        Reconnect
+                      </button>
                     )}
+                    <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 rounded-full border border-white/10 hover:bg-white/10 transition text-slate-300">
+                        <Activity size={18} />
+                    </button>
+                    <button onClick={() => setIsMobileNavOpen((v) => !v)} className="md:hidden p-2 rounded-full border border-white/10 hover:bg-white/10 transition text-slate-300">
+                        <Menu size={18} />
+                    </button>
                 </div>
             </header>
+            <AnimatePresence>
+              {isMobileNavOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: -8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                  className="md:hidden px-4 py-3 border-b border-white/5 bg-[#0f1016]/95 backdrop-blur-md flex items-center gap-4 text-sm"
+                >
+                  <button className="hover:text-white transition-colors" onClick={() => setIsMobileNavOpen(false)}>Home</button>
+                  <button className="hover:text-white transition-colors" onClick={() => setIsMobileNavOpen(false)}>Features</button>
+                  <button className="hover:text-white transition-colors" onClick={() => setIsMobileNavOpen(false)}>About</button>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             {/* Chat History */}
-            <div className="flex-1 overflow-y-auto w-full max-w-4xl mx-auto p-4 md:p-8 flex flex-col gap-6 scroll-smooth pb-32">
+            <div className="flex-1 overflow-y-auto w-full max-w-5xl mx-auto p-4 sm:p-6 md:p-8 flex flex-col gap-6 scroll-smooth pb-32">
                 {timeline.length === 0 ? (
                     <motion.div 
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
-                        className="flex flex-col items-center justify-center h-full text-center mt-20"
+                        className="flex flex-col items-center justify-center h-full text-center mt-10 sm:mt-16"
                     >
                         <div className="w-20 h-20 mb-6 rounded-full bg-gradient-to-br from-indigo-500/20 to-fuchsia-500/20 flex items-center justify-center">
                             <Sparkles size={40} className="text-fuchsia-400 opacity-60" />
                         </div>
-                        <h2 className="text-3xl font-medium mb-3">Hello, how can I help?</h2>
-                        <p className="text-slate-400 max-w-md">Session starts automatically when you open this page. Share your screen and Synapse AI can guide you through solutions.</p>
+                        <h2 className="text-2xl sm:text-3xl font-medium mb-3">Welcome to Synapse AI</h2>
+                        <p className="text-slate-400 max-w-xl px-4">Hi there. Session is ready in the background. Ask anything, share your screen when needed, and I will help you step by step.</p>
                     </motion.div>
                 ) : (
                     timeline.map((item, idx) => (
