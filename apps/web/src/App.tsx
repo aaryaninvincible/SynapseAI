@@ -224,6 +224,15 @@ export default function App() {
           <span className={`pill ${wsState === "open" ? "ok" : ""}`}>{wsBadge}</span>
           <span className={`pill ${screenOn ? "ok" : ""}`}>{screenOn ? "Screen On" : "Screen Off"}</span>
           <span className={`pill ${micOn ? "ok" : ""}`}>{micOn ? "Mic On" : "Mic Off"}</span>
+          <span className={`voiceChip ${micOn ? "active" : ""}`}>
+            <span className="bars">
+              <i />
+              <i />
+              <i />
+              <i />
+            </span>
+            Live Voice
+          </span>
         </div>
       </header>
 
