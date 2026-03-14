@@ -37,6 +37,10 @@ Backend env vars:
 
 - `GOOGLE_API_KEY`: Gemini key (optional in this scaffold, falls back to mock response mode).
 - `ALLOWED_ORIGINS`: comma-separated CORS origins.
+- `GEMINI_LIVE_MODEL`: defaults to `gemini-2.0-flash-live-001`.
+- `GEMINI_FALLBACK_MODEL`: defaults to `gemini-2.5-flash`.
+- `GCP_PROJECT_ID`: enables Firestore persistence when set with valid auth.
+- `GCS_BUCKET_NAME`: optional; stores periodic frame snapshots as text blobs.
 
 ## Current Status
 
@@ -52,5 +56,7 @@ This is a working v0 scaffold:
 - mic audio chunk streaming from browser to backend websocket
 - action plan JSON returned to frontend
 - explicit session end from UI
+- per-session Gemini Live connection with fallback to non-live generation
+- optional Firestore session/events persistence and optional Cloud Storage frame snapshots
 
 Next: replace the mock branch with full Gemini Live streaming audio/video IO.

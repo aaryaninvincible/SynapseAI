@@ -8,11 +8,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import get_settings
 from .gemini_live import GeminiLiveAdapter
 from .models import EndSessionResponse, StartSessionRequest, StartSessionResponse, WsClientEvent
+from .persistence import PersistenceService
 from .session_manager import SessionManager
 
 settings = get_settings()
-gemini = GeminiLiveAdapter(api_key=settings.google_api_key)
-sessions = SessionManager(gemini=gemini)
+gemini = GeminiLiveAdapter(
+    api_key=settings.google_api_key,
+    live_model=settings.gemini_live_model,
+    fallback_model=settings.gemini_fallback_model,
+)
+persistence = PersistenceService(project_id=settings.gcp_project_id, bucket_name=settings.gcs_bucket_name)
+sessions = SessionManager(gemini=gemini, persistence=persistence)
 
 app = FastAPI(title="ScreenSense Agent API", version="0.1.0")
 app.add_middleware(
@@ -40,6 +46,7 @@ async def start_session(body: StartSessionRequest) -> StartSessionResponse:
 async def end_session(session_id: str) -> EndSessionResponse:
     if not sessions.exists(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
+    await gemini.close_session(session_id)
     sessions.end(session_id)
     return EndSessionResponse(ok=True)
 
@@ -60,8 +67,8 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
             for item in responses:
                 await websocket.send_json(item.model_dump())
     except WebSocketDisconnect:
+        await gemini.close_session(session_id)
         return
     except Exception as exc:
         await websocket.send_json({"type": "error", "payload": {"message": str(exc)}})
         await websocket.close(code=1011)
-

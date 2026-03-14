@@ -5,6 +5,7 @@ from typing import Any
 
 from .gemini_live import GeminiLiveAdapter
 from .models import WsServerEvent
+from .persistence import PersistenceService
 
 
 @dataclass
@@ -18,15 +19,26 @@ class SessionState:
 
 
 class SessionManager:
-    def __init__(self, gemini: GeminiLiveAdapter) -> None:
+    def __init__(self, gemini: GeminiLiveAdapter, persistence: PersistenceService) -> None:
         self.gemini = gemini
+        self.persistence = persistence
         self.sessions: dict[str, SessionState] = {}
 
     def create(self, session_id: str, user_id: str | None = None) -> None:
         self.sessions[session_id] = SessionState(user_id=user_id)
+        self.persistence.session_started(session_id, user_id)
 
     def end(self, session_id: str) -> None:
-        self.sessions.pop(session_id, None)
+        state = self.sessions.pop(session_id, None)
+        if state:
+            self.persistence.session_ended(
+                session_id,
+                {
+                    "frame_count": state.frame_count,
+                    "audio_chunk_count": state.audio_chunk_count,
+                    "timeline_size": len(state.timeline),
+                },
+            )
 
     def exists(self, session_id: str) -> bool:
         return session_id in self.sessions
@@ -37,12 +49,18 @@ class SessionManager:
 
         if event_type == "interrupt":
             state.interrupted = True
+            await self.gemini.interrupt(session_id)
+            self.persistence.append_event(session_id, "system", {"type": "interrupt"})
             out.append(WsServerEvent(type="state_update", payload={"status": "interrupted"}))
             return out
 
         if event_type == "video_frame":
             state.latest_frame = payload.get("image_base64")
             state.frame_count += 1
+            if isinstance(state.latest_frame, str):
+                await self.gemini.send_video_frame(session_id, state.latest_frame)
+                if state.frame_count % 10 == 0:
+                    self.persistence.store_frame(session_id, state.latest_frame, state.frame_count)
             if state.frame_count % 5 == 0:
                 out.append(
                     WsServerEvent(
@@ -54,6 +72,10 @@ class SessionManager:
 
         if event_type == "audio_chunk":
             state.audio_chunk_count += 1
+            audio_b64 = str(payload.get("audio_base64", ""))
+            mime_type = str(payload.get("mime_type", "audio/webm"))
+            if audio_b64:
+                await self.gemini.send_audio_chunk(session_id, audio_b64, mime_type)
             if state.audio_chunk_count == 1 or state.audio_chunk_count % 10 == 0:
                 out.append(
                     WsServerEvent(
@@ -72,9 +94,13 @@ class SessionManager:
             if state.interrupted:
                 state.interrupted = False
 
-            reply = await self.gemini.generate(user_text=text, latest_frame=state.latest_frame)
+            self.persistence.append_event(session_id, "user", {"text": text})
+            reply = await self.gemini.generate(session_id=session_id, user_text=text, latest_frame=state.latest_frame)
 
             state.timeline.append({"user_text": text, "agent_text": reply.spoken_text})
+            self.persistence.append_event(
+                session_id, "agent", {"spoken_text": reply.spoken_text, "action_plan": reply.action_plan}
+            )
             for chunk in self._chunk_text(reply.spoken_text):
                 out.append(WsServerEvent(type="agent_text_delta", payload={"text": chunk}))
             out.append(WsServerEvent(type="agent_action_plan", payload=reply.action_plan))

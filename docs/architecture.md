@@ -12,7 +12,8 @@
 - Session lifecycle (`/session/start`, `/session/{id}/end`).
 - WebSocket endpoint (`/ws/{session_id}`) for multimodal events.
 - Session manager with per-session in-memory state.
-- Gemini adapter (mock fallback when key/package unavailable).
+- Gemini Live adapter (per-session live socket + fallback when unavailable).
+- Persistence service (Firestore events + optional GCS frame snapshots).
 
 3. Google Cloud Target (next iteration)
 - Cloud Run for backend service.
@@ -40,4 +41,3 @@ Outbound server events:
 - The backend is intentionally stateful per websocket session in v0.
 - In production we should move session state to Firestore/Redis for scale-out.
 - Gemini Live adapter currently supports basic text response with tool-style JSON output pattern.
-
