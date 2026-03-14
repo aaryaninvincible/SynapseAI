@@ -582,19 +582,34 @@ export default function App() {
         {/* Right Sidebar - Action Plan & Activity */}
         <AnimatePresence>
             {isSidebarOpen && (
+                <>
+                <motion.button
+                    type="button"
+                    aria-label="Close analysis panel"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    onClick={() => setIsSidebarOpen(false)}
+                    className="absolute inset-0 z-20 bg-black/40 md:hidden"
+                />
                 <motion.aside 
                     initial={{ x: 400, opacity: 0 }}
                     animate={{ x: 0, opacity: 1 }}
                     exit={{ x: 400, opacity: 0 }}
                     transition={{ type: "spring", damping: 25, stiffness: 200 }}
-                    className="w-[380px] h-full bg-glass border-l border-white/5 flex flex-col z-20 shadow-2xl absolute right-0 top-0"
+                    className="w-full md:w-[380px] h-full bg-glass border-l border-white/5 flex flex-col z-30 shadow-2xl absolute right-0 top-0"
                 >
-                    <div className="p-5 flex items-center justify-between border-b border-white/5">
+                    <div className="p-5 flex items-center justify-between border-b border-white/5 sticky top-0 bg-[#121319]/95 backdrop-blur-md">
                         <div className="flex items-center gap-2">
                             <Activity size={18} className="text-indigo-400" />
                             <h2 className="font-semibold tracking-wide text-sm">Live Analysis</h2>
                         </div>
-                        <button onClick={() => setIsSidebarOpen(false)} className="p-1 rounded-full hover:bg-white/10 text-slate-400">
+                        <button
+                            type="button"
+                            aria-label="Collapse analysis panel"
+                            onClick={() => setIsSidebarOpen(false)}
+                            className="p-2 rounded-full hover:bg-white/10 text-slate-300"
+                        >
                             <ChevronRight size={20} />
                         </button>
                     </div>
@@ -680,6 +695,7 @@ export default function App() {
                          )}
                     </div>
                 </motion.aside>
+                </>
             )}
         </AnimatePresence>
 
