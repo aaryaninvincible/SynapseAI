@@ -1,0 +1,107 @@
+:root {
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  color: #f3f8ff;
+  background: linear-gradient(120deg, #06233d 0%, #0f4b67 55%, #5a7f2f 100%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+.page {
+  max-width: 1024px;
+  margin: 0 auto;
+  padding: 24px;
+  display: grid;
+  gap: 16px;
+}
+
+header h1 {
+  margin: 0 0 6px;
+}
+
+header p {
+  margin: 0;
+  opacity: 0.92;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+button {
+  border: none;
+  border-radius: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+  background: #e8f4ff;
+  color: #103752;
+  font-weight: 700;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.chat,
+.plan {
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.inputRow {
+  display: flex;
+  gap: 8px;
+}
+
+input {
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid #89badf;
+  padding: 10px;
+  font-size: 15px;
+}
+
+.timeline {
+  margin-top: 12px;
+  max-height: 260px;
+  overflow: auto;
+  display: grid;
+  gap: 8px;
+}
+
+.msg {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.msg.user {
+  background: rgba(140, 219, 255, 0.23);
+}
+
+.msg.agent {
+  background: rgba(167, 241, 155, 0.2);
+}
+
+.msg.system {
+  background: rgba(255, 244, 171, 0.24);
+}
+
+pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  font-size: 13px;
+}
+
