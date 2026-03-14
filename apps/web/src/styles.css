@@ -59,6 +59,20 @@ button:disabled {
   padding: 12px;
 }
 
+.steps {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.step {
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
 .inputRow {
   display: flex;
   gap: 8px;
@@ -104,4 +118,3 @@ pre {
   margin: 0;
   font-size: 13px;
 }
-

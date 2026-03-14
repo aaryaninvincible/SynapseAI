@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type ServerEvent = {
   type: "agent_text_delta" | "agent_action_plan" | "state_update" | "error";
@@ -6,6 +6,12 @@ type ServerEvent = {
 };
 
 type TimelineItem = { role: "user" | "agent" | "system"; text: string };
+type ActionStep = {
+  type?: string;
+  target?: string;
+  text?: string;
+  bbox?: [number, number, number, number];
+};
 
 const API_BASE = import.meta.env.VITE_AGENT_BASE_URL ?? "http://localhost:8000";
 
@@ -31,6 +37,17 @@ export default function App() {
   const append = (role: TimelineItem["role"], text: string) => {
     setTimeline((prev) => [...prev, { role, text }]);
   };
+
+  useEffect(() => {
+    return () => {
+      if (frameTimerRef.current !== null) {
+        window.clearInterval(frameTimerRef.current);
+      }
+      mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+      wsRef.current?.close();
+      window.speechSynthesis.cancel();
+    };
+  }, []);
 
   const startSession = async () => {
     setWsState("connecting");
@@ -62,7 +79,6 @@ export default function App() {
         const text = String(event.payload.text ?? "");
         append("agent", text);
         if ("speechSynthesis" in window && text) {
-          window.speechSynthesis.cancel();
           window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
         }
       } else if (event.type === "agent_action_plan") {
@@ -127,6 +143,20 @@ export default function App() {
     setScreenOn(false);
   };
 
+  const endSession = async () => {
+    if (!sessionId) return;
+    if (screenOn) stopScreen();
+    wsRef.current?.close();
+    wsRef.current = null;
+    await fetch(`${API_BASE}/session/${sessionId}/end`, { method: "POST" }).catch(() => null);
+    setSessionId("");
+    setWsState("idle");
+    setActionPlan(null);
+    append("system", "Session ended.");
+  };
+
+  const actionSteps = (actionPlan?.steps as ActionStep[] | undefined) ?? [];
+
   return (
     <div className="page">
       <header>
@@ -146,6 +176,9 @@ export default function App() {
         </button>
         <button onClick={screenOn ? stopScreen : startScreen} disabled={wsState !== "open"}>
           {screenOn ? "Stop Screen Share" : "Start Screen Share"}
+        </button>
+        <button onClick={endSession} disabled={!sessionId}>
+          End Session
         </button>
       </section>
 
@@ -173,6 +206,17 @@ export default function App() {
 
       <section className="plan">
         <h2>Action Plan</h2>
+        <div className="steps">
+          {actionSteps.length === 0 && <p>No actionable steps yet.</p>}
+          {actionSteps.map((step, idx) => (
+            <div className="step" key={`step-${idx}`}>
+              <strong>{idx + 1}. {step.type ?? "action"}</strong>
+              <span>{step.target ? `Target: ${step.target}` : "Target: N/A"}</span>
+              {step.text && <span>Input: {step.text}</span>}
+              {step.bbox && <span>BBox: {JSON.stringify(step.bbox)}</span>}
+            </div>
+          ))}
+        </div>
         <pre>{actionPlan ? JSON.stringify(actionPlan, null, 2) : "No plan yet."}</pre>
       </section>
 
@@ -180,4 +224,3 @@ export default function App() {
     </div>
   );
 }
-

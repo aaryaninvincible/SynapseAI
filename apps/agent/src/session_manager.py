@@ -59,10 +59,32 @@ class SessionManager:
             reply = await self.gemini.generate(user_text=text, latest_frame=state.latest_frame)
 
             state.timeline.append({"user_text": text, "agent_text": reply.spoken_text})
-            out.append(WsServerEvent(type="agent_text_delta", payload={"text": reply.spoken_text}))
+            for chunk in self._chunk_text(reply.spoken_text):
+                out.append(WsServerEvent(type="agent_text_delta", payload={"text": chunk}))
             out.append(WsServerEvent(type="agent_action_plan", payload=reply.action_plan))
             return out
 
         out.append(WsServerEvent(type="error", payload={"message": f"Unsupported event type: {event_type}"}))
         return out
 
+    def _chunk_text(self, text: str) -> list[str]:
+        # Simulate streaming by splitting on sentence boundaries first, then fallback chunking.
+        stripped = text.strip()
+        if not stripped:
+            return []
+
+        parts: list[str] = []
+        for sep in [". ", "? ", "! "]:
+            if sep in stripped and not parts:
+                temp = stripped.split(sep)
+                for idx, item in enumerate(temp):
+                    item = item.strip()
+                    if not item:
+                        continue
+                    suffix = sep.strip() if idx < len(temp) - 1 else ""
+                    parts.append(f"{item}{suffix}".strip())
+        if parts:
+            return parts
+
+        size = 90
+        return [stripped[i : i + size] for i in range(0, len(stripped), size)]

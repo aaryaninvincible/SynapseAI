@@ -45,9 +45,10 @@ This is a working v0 scaffold:
 - session start/end APIs
 - websocket event loop
 - user text -> agent response flow
+- chunked agent text deltas (stream-like UX)
 - interruption event handling
 - periodic screen-frame upload from browser
 - action plan JSON returned to frontend
+- explicit session end from UI
 
 Next: replace the mock branch with full Gemini Live streaming audio/video IO.
-
