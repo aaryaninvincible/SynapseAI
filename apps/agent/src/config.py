@@ -12,6 +12,7 @@ class Settings:
         self.google_api_keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
         self.gemini_live_model = getenv("GEMINI_LIVE_MODEL", "gemini-2.0-flash-live-001").strip()
         self.gemini_fallback_model = getenv("GEMINI_FALLBACK_MODEL", "gemini-2.0-flash").strip()
+        self.openrouter_api_key = getenv("OPENROUTER_API_KEY", "").strip()
         raw_origins = getenv("ALLOWED_ORIGINS", "*")
         self.allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
         self.gcp_project_id = getenv("GCP_PROJECT_ID", "").strip()
