@@ -999,8 +999,8 @@ export default function App() {
         {/* Right Sidebar - Action Plan & Activity */}
         <AnimatePresence>
             {isSidebarOpen && (
-                <>
                 <motion.button
+                    key="sidebar-overlay"
                     type="button"
                     aria-label="Close analysis panel"
                     initial={{ opacity: 0 }}
@@ -1009,7 +1009,10 @@ export default function App() {
                     onClick={() => setIsSidebarOpen(false)}
                     className="absolute inset-0 z-20 bg-black/40 md:hidden"
                 />
+            )}
+            {isSidebarOpen && (
                 <motion.aside 
+                    key="sidebar-content"
                     initial={{ x: 400, opacity: 0 }}
                     animate={{ x: 0, opacity: 1 }}
                     exit={{ x: 400, opacity: 0 }}
@@ -1101,7 +1104,6 @@ export default function App() {
 
                     </div>
                 </motion.aside>
-                </>
             )}
         </AnimatePresence>
 
