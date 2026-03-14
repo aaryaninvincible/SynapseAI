@@ -22,11 +22,14 @@ export default function App() {
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [actionPlan, setActionPlan] = useState<Record<string, unknown> | null>(null);
   const [screenOn, setScreenOn] = useState(false);
+  const [micOn, setMicOn] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const frameTimerRef = useRef<number | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const screenStreamRef = useRef<MediaStream | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
 
   const wsUrl = useMemo(() => {
     if (!sessionId) return "";
@@ -43,7 +46,9 @@ export default function App() {
       if (frameTimerRef.current !== null) {
         window.clearInterval(frameTimerRef.current);
       }
-      mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+      screenStreamRef.current?.getTracks().forEach((t) => t.stop());
+      micStreamRef.current?.getTracks().forEach((t) => t.stop());
+      recorderRef.current?.stop();
       wsRef.current?.close();
       window.speechSynthesis.cancel();
     };
@@ -84,7 +89,10 @@ export default function App() {
       } else if (event.type === "agent_action_plan") {
         setActionPlan(event.payload);
       } else if (event.type === "state_update") {
-        append("system", `State: ${String(event.payload.status ?? "updated")}`);
+        const status = String(event.payload.status ?? "updated");
+        if (status === "interrupted") {
+          append("system", "State: interrupted");
+        }
       } else if (event.type === "error") {
         append("system", `Error: ${String(event.payload.message ?? "unknown")}`);
       }
@@ -113,7 +121,7 @@ export default function App() {
       video: { frameRate: 5 },
       audio: false,
     });
-    mediaStreamRef.current = stream;
+    screenStreamRef.current = stream;
     if (videoRef.current) {
       videoRef.current.srcObject = stream;
       await videoRef.current.play();
@@ -138,14 +146,54 @@ export default function App() {
       window.clearInterval(frameTimerRef.current);
       frameTimerRef.current = null;
     }
-    mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
-    mediaStreamRef.current = null;
+    screenStreamRef.current?.getTracks().forEach((t) => t.stop());
+    screenStreamRef.current = null;
     setScreenOn(false);
+  };
+
+  const blobToBase64 = (blob: Blob): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = String(reader.result ?? "");
+        const payload = result.includes(",") ? result.split(",")[1] : "";
+        resolve(payload);
+      };
+      reader.onerror = () => reject(new Error("Failed to convert audio blob"));
+      reader.readAsDataURL(blob);
+    });
+
+  const startMic = async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    micStreamRef.current = stream;
+
+    const recorder = new MediaRecorder(stream);
+    recorderRef.current = recorder;
+    recorder.ondataavailable = async (event) => {
+      if (!event.data || event.data.size === 0) return;
+      const audioBase64 = await blobToBase64(event.data);
+      sendEvent("audio_chunk", {
+        audio_base64: audioBase64,
+        mime_type: event.data.type || "audio/webm",
+        size_bytes: event.data.size,
+      });
+    };
+    recorder.start(500);
+    setMicOn(true);
+  };
+
+  const stopMic = () => {
+    recorderRef.current?.stop();
+    recorderRef.current = null;
+    micStreamRef.current?.getTracks().forEach((t) => t.stop());
+    micStreamRef.current = null;
+    setMicOn(false);
   };
 
   const endSession = async () => {
     if (!sessionId) return;
     if (screenOn) stopScreen();
+    if (micOn) stopMic();
     wsRef.current?.close();
     wsRef.current = null;
     await fetch(`${API_BASE}/session/${sessionId}/end`, { method: "POST" }).catch(() => null);
@@ -176,6 +224,9 @@ export default function App() {
         </button>
         <button onClick={screenOn ? stopScreen : startScreen} disabled={wsState !== "open"}>
           {screenOn ? "Stop Screen Share" : "Start Screen Share"}
+        </button>
+        <button onClick={micOn ? stopMic : startMic} disabled={wsState !== "open"}>
+          {micOn ? "Stop Mic Stream" : "Start Mic Stream"}
         </button>
         <button onClick={endSession} disabled={!sessionId}>
           End Session

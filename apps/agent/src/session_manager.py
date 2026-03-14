@@ -12,6 +12,8 @@ class SessionState:
     user_id: str | None = None
     latest_frame: str | None = None
     interrupted: bool = False
+    frame_count: int = 0
+    audio_chunk_count: int = 0
     timeline: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -40,11 +42,25 @@ class SessionManager:
 
         if event_type == "video_frame":
             state.latest_frame = payload.get("image_base64")
-            out.append(WsServerEvent(type="state_update", payload={"status": "frame_received"}))
+            state.frame_count += 1
+            if state.frame_count % 5 == 0:
+                out.append(
+                    WsServerEvent(
+                        type="state_update",
+                        payload={"status": "vision_streaming", "frames_received": state.frame_count},
+                    )
+                )
             return out
 
         if event_type == "audio_chunk":
-            out.append(WsServerEvent(type="state_update", payload={"status": "audio_received"}))
+            state.audio_chunk_count += 1
+            if state.audio_chunk_count == 1 or state.audio_chunk_count % 10 == 0:
+                out.append(
+                    WsServerEvent(
+                        type="state_update",
+                        payload={"status": "audio_streaming", "chunks_received": state.audio_chunk_count},
+                    )
+                )
             return out
 
         if event_type == "user_text":

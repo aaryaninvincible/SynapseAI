@@ -48,6 +48,8 @@ This is a working v0 scaffold:
 - chunked agent text deltas (stream-like UX)
 - interruption event handling
 - periodic screen-frame upload from browser
+- Gemini request includes latest screenshot as multimodal input when API key is configured
+- mic audio chunk streaming from browser to backend websocket
 - action plan JSON returned to frontend
 - explicit session end from UI
 
