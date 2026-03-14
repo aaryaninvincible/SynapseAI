@@ -270,8 +270,7 @@ class GeminiLiveAdapter:
             "model": "google/gemini-2.0-flash",
             "messages": [
                 {"role": "user", "content": contents}
-            ],
-            "response_format": {"type": "json_object"}
+            ]
         }
         
         # Also try openrouter's primary model if that fails
