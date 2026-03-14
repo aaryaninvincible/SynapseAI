@@ -204,20 +204,35 @@ export default function App() {
   };
 
   const actionSteps = (actionPlan?.steps as ActionStep[] | undefined) ?? [];
+  const wsBadge = wsState === "open" ? "Connected" : wsState === "connecting" ? "Connecting" : "Offline";
+  const sessionBadge = sessionId ? `Active ${sessionId.slice(0, 8)}` : "No Session";
 
   return (
-    <div className="page">
-      <header>
-        <h1>ScreenSense Support Copilot</h1>
-        <p>Real-time multimodal troubleshooting scaffold.</p>
+    <main className="page">
+      <div className="backgroundOrb orbA" />
+      <div className="backgroundOrb orbB" />
+      <div className="backgroundOrb orbC" />
+
+      <header className="hero glassCard">
+        <div>
+          <p className="eyebrow">Multimodal Live Agent</p>
+          <h1>ScreenSense Support Copilot</h1>
+          <p className="subtext">Premium realtime troubleshooting with voice, vision, and interrupt-ready guidance.</p>
+        </div>
+        <div className="heroStats">
+          <span className="pill">{sessionBadge}</span>
+          <span className={`pill ${wsState === "open" ? "ok" : ""}`}>{wsBadge}</span>
+          <span className={`pill ${screenOn ? "ok" : ""}`}>{screenOn ? "Screen On" : "Screen Off"}</span>
+          <span className={`pill ${micOn ? "ok" : ""}`}>{micOn ? "Mic On" : "Mic Off"}</span>
+        </div>
       </header>
 
-      <section className="controls">
+      <section className="glassCard controls">
         <button onClick={startSession} disabled={!!sessionId}>
-          {sessionId ? `Session: ${sessionId.slice(0, 8)}...` : "Start Session"}
+          {sessionId ? `Session ${sessionId.slice(0, 8)}` : "Start Session"}
         </button>
         <button onClick={connectWs} disabled={!sessionId || wsState === "open"}>
-          {wsState === "open" ? "Connected" : "Connect WS"}
+          Connect Live Channel
         </button>
         <button onClick={interrupt} disabled={wsState !== "open"}>
           Interrupt
@@ -228,50 +243,66 @@ export default function App() {
         <button onClick={micOn ? stopMic : startMic} disabled={wsState !== "open"}>
           {micOn ? "Stop Mic Stream" : "Start Mic Stream"}
         </button>
-        <button onClick={endSession} disabled={!sessionId}>
+        <button className="danger" onClick={endSession} disabled={!sessionId}>
           End Session
         </button>
       </section>
 
-      <section className="chat">
-        <div className="inputRow">
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && sendText()}
-            placeholder="Ask the agent..."
-          />
-          <button onClick={sendText} disabled={wsState !== "open"}>
-            Send
-          </button>
-        </div>
+      <section className="gridArea">
+        <article className="glassCard chat">
+          <div className="panelHead">
+            <h2>Conversation</h2>
+            <span>{timeline.length} events</span>
+          </div>
+          <div className="inputRow">
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && sendText()}
+              placeholder="Ask the agent to inspect your screen..."
+            />
+            <button onClick={sendText} disabled={wsState !== "open"}>
+              Send
+            </button>
+          </div>
 
-        <div className="timeline">
-          {timeline.map((item, idx) => (
-            <div key={`${item.role}-${idx}`} className={`msg ${item.role}`}>
-              <strong>{item.role}:</strong> {item.text}
-            </div>
-          ))}
-        </div>
-      </section>
+          <div className="timeline">
+            {timeline.length === 0 && <p className="emptyText">No messages yet. Start a live session to begin.</p>}
+            {timeline.map((item, idx) => (
+              <div key={`${item.role}-${idx}`} className={`msg ${item.role}`}>
+                <strong>{item.role}</strong>
+                <span>{item.text}</span>
+              </div>
+            ))}
+          </div>
+        </article>
 
-      <section className="plan">
-        <h2>Action Plan</h2>
-        <div className="steps">
-          {actionSteps.length === 0 && <p>No actionable steps yet.</p>}
-          {actionSteps.map((step, idx) => (
-            <div className="step" key={`step-${idx}`}>
-              <strong>{idx + 1}. {step.type ?? "action"}</strong>
-              <span>{step.target ? `Target: ${step.target}` : "Target: N/A"}</span>
-              {step.text && <span>Input: {step.text}</span>}
-              {step.bbox && <span>BBox: {JSON.stringify(step.bbox)}</span>}
-            </div>
-          ))}
-        </div>
-        <pre>{actionPlan ? JSON.stringify(actionPlan, null, 2) : "No plan yet."}</pre>
+        <aside className="glassCard plan">
+          <div className="panelHead">
+            <h2>Action Plan</h2>
+            <span>{actionSteps.length} steps</span>
+          </div>
+          <div className="steps">
+            {actionSteps.length === 0 && <p className="emptyText">No actionable steps yet.</p>}
+            {actionSteps.map((step, idx) => (
+              <div className="step" key={`step-${idx}`}>
+                <strong>
+                  {idx + 1}. {step.type ?? "action"}
+                </strong>
+                <span>{step.target ? `Target: ${step.target}` : "Target: N/A"}</span>
+                {step.text && <span>Input: {step.text}</span>}
+                {step.bbox && <span>Box: {JSON.stringify(step.bbox)}</span>}
+              </div>
+            ))}
+          </div>
+          <details>
+            <summary>Raw JSON</summary>
+            <pre>{actionPlan ? JSON.stringify(actionPlan, null, 2) : "No plan yet."}</pre>
+          </details>
+        </aside>
       </section>
 
       <video ref={videoRef} style={{ display: "none" }} playsInline muted />
-    </div>
+    </main>
   );
 }
