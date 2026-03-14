@@ -12,3 +12,19 @@ gcloud run deploy screensense-agent \
   --set-env-vars GOOGLE_API_KEY=<KEY>,ALLOWED_ORIGINS=*
 ```
 
+## One-Command Script (PowerShell)
+
+```powershell
+./infra/cloudrun/deploy.ps1 `
+  -ProjectId "<PROJECT_ID>" `
+  -Region "us-central1" `
+  -AllowedOrigins "*" `
+  -GcpProjectId "<PROJECT_ID>" `
+  -GcsBucketName "<OPTIONAL_BUCKET>"
+```
+
+Recommended after deploy:
+
+1. Set `GOOGLE_API_KEY` as a Cloud Run secret env var.
+2. Update frontend `VITE_AGENT_BASE_URL` to the Cloud Run URL.
+3. Verify `/health` and websocket `/ws/{session_id}` from browser.

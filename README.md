@@ -60,3 +60,8 @@ This is a working v0 scaffold:
 - optional Firestore session/events persistence and optional Cloud Storage frame snapshots
 
 Next: replace the mock branch with full Gemini Live streaming audio/video IO.
+
+## Deployment
+
+- Cloud Run script: `infra/cloudrun/deploy.ps1`
+- Notes: `infra/cloudrun/README.md`
