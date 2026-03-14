@@ -1,6 +1,10 @@
 from functools import lru_cache
 from os import getenv
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 class Settings:
     def __init__(self) -> None:
