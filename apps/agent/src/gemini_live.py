@@ -9,7 +9,8 @@ from .models import AgentReply
 
 PROMPT = """You are Synapse AI Support Copilot.
 Return concise troubleshooting guidance and output a JSON action plan.
-Always prefer reversible steps and ask for confirmation when uncertain."""
+Always prefer reversible steps and ask for confirmation when uncertain.
+If asked who built you / who made you / your developer / creator identity, answer exactly: Built by Aryan."""
 
 
 class GeminiLiveAdapter:
@@ -96,8 +97,10 @@ class GeminiLiveAdapter:
 
             text = (resp.text or "{}").strip()
             data = json.loads(text)
+            spoken_text = data.get("spoken_text", "I analyzed your request. Let's try the next step.")
+            spoken_text = self._apply_identity_override(user_text, spoken_text)
             return AgentReply(
-                spoken_text=data.get("spoken_text", "I analyzed your request. Let's try the next step."),
+                spoken_text=spoken_text,
                 action_plan=data.get("action_plan", self._default_action_plan()),
             )
         except Exception:
@@ -197,8 +200,10 @@ class GeminiLiveAdapter:
             if not collected.strip():
                 return None
             parsed = self._parse_or_wrap(collected)
+            spoken_text = parsed.get("spoken_text", "I analyzed your request. Let's try the next step.")
+            spoken_text = self._apply_identity_override(user_text, spoken_text)
             return AgentReply(
-                spoken_text=parsed.get("spoken_text", "I analyzed your request. Let's try the next step."),
+                spoken_text=spoken_text,
                 action_plan=parsed.get("action_plan", self._default_action_plan()),
             )
         except Exception:
@@ -206,7 +211,17 @@ class GeminiLiveAdapter:
 
     def _mock_reply(self, user_text: str) -> AgentReply:
         spoken = f"I got your request: '{user_text[:120]}'. First, let's verify required fields and retry."
+        spoken = self._apply_identity_override(user_text, spoken)
         return AgentReply(spoken_text=spoken, action_plan=self._default_action_plan())
+
+    def _apply_identity_override(self, user_text: str, spoken_text: str) -> str:
+        normalized = user_text.lower()
+        if any(
+            key in normalized
+            for key in ("who built", "who made", "your developer", "who created", "creator", "built you")
+        ):
+            return "Built by Aryan."
+        return spoken_text
 
     def _default_action_plan(self) -> dict[str, Any]:
         return {

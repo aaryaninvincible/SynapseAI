@@ -33,6 +33,8 @@ export default function App() {
   const [micOn, setMicOn] = useState(false);
   const [speechOn, setSpeechOn] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<"home" | "features" | "about">("home");
+  const [isThinking, setIsThinking] = useState(false);
   const [geminiStatus, setGeminiStatus] = useState<GeminiStatus>({
     backendUp: false,
     mode: "unknown",
@@ -279,8 +281,10 @@ export default function App() {
     ws.onclose = () => {
       wsRef.current = null;
       setWsState("idle");
+      setIsThinking(false);
     };
     ws.onmessage = (e) => {
+      setIsThinking(false);
       const event: ServerEvent = JSON.parse(e.data);
       if (event.type === "agent_text_delta") {
         const text = String(event.payload.text ?? "");
@@ -317,7 +321,7 @@ export default function App() {
       normalized.includes("developer") ||
       normalized.includes("made you")
     ) {
-      const creatorLine = "Mr aryan is my developer, you can find him on instagram aaryaninvincible.";
+      const creatorLine = "Built by Aryan.";
       append("agent", creatorLine);
       if (speechOnRef.current && "speechSynthesis" in window) {
         window.speechSynthesis.speak(new SpeechSynthesisUtterance(creatorLine));
@@ -326,11 +330,13 @@ export default function App() {
       return;
     }
     sendEvent("user_text", { text });
+    setIsThinking(true);
     setInput("");
   };
 
   const interrupt = () => {
     sendEvent("interrupt", {});
+    setIsThinking(false);
     window.speechSynthesis.cancel();
   };
 
@@ -432,6 +438,7 @@ export default function App() {
     sessionIdRef.current = "";
     setSessionId("");
     setWsState("idle");
+    setIsThinking(false);
     setActionPlan(null);
     append("system", "Session ended.");
     setIsSidebarOpen(false);
@@ -440,7 +447,7 @@ export default function App() {
   const actionSteps = (actionPlan?.steps as ActionStep[] | undefined) ?? [];
 
   return (
-    <div className="dark min-h-[100svh] w-full flex text-[#E3E3E3] overflow-x-hidden relative selection:bg-indigo-500/30" style={{ fontFamily: "'Space Grotesk', sans-serif", backgroundColor: "#0b0c10" }}>
+    <div className="dark h-[100svh] w-full flex text-[#E3E3E3] overflow-hidden relative selection:bg-indigo-500/30" style={{ fontFamily: "'Space Grotesk', sans-serif", backgroundColor: "#0b0c10" }}>
         <style>
         {`
             ::-webkit-scrollbar {
@@ -499,6 +506,7 @@ export default function App() {
               }}
               transition={{ duration: 25, repeat: Infinity, ease: "linear" }}
               className="absolute -top-[20%] -left-[10%] w-[60%] h-[60%] rounded-full bg-indigo-500/20 blur-[120px]" 
+              style={{ willChange: "transform, opacity", transform: "translateZ(0)" }}
             />
             <motion.div 
               animate={{ 
@@ -508,11 +516,12 @@ export default function App() {
               }}
               transition={{ duration: 30, repeat: Infinity, ease: "linear" }}
               className="absolute top-[40%] -right-[10%] w-[50%] h-[50%] rounded-full bg-fuchsia-500/20 blur-[120px]" 
+              style={{ willChange: "transform, opacity", transform: "translateZ(0)" }}
             />
         </div>
 
         {/* Main Chat Area */}
-        <main className="flex-1 flex flex-col relative z-10 min-h-[100svh] transition-all duration-500">
+        <main className="flex-1 flex flex-col relative z-10 h-full overflow-hidden transition-all duration-500">
             {/* Header */}
             <header className="px-3 sm:px-6 lg:px-8 py-3 sm:py-5 flex items-center justify-between gap-2 border-b border-white/5 bg-[#0b0c10]/70 backdrop-blur-md">
                 <div className="flex items-center gap-3">
@@ -554,136 +563,221 @@ export default function App() {
             </header>
             <nav className="px-3 sm:px-6 lg:px-8 py-2 border-b border-white/5 bg-[#0f1016]/70 backdrop-blur-md">
               <div className="flex items-center gap-2 overflow-x-auto whitespace-nowrap text-xs sm:text-sm text-slate-300 scrollbar-thin">
-                <button className="px-3 py-1.5 rounded-full border border-white/10 hover:bg-white/10 transition-colors">Home</button>
-                <button className="px-3 py-1.5 rounded-full border border-white/10 hover:bg-white/10 transition-colors">Features</button>
-                <button className="px-3 py-1.5 rounded-full border border-white/10 hover:bg-white/10 transition-colors">About</button>
+                <button onClick={() => setActiveTab("home")} className={`px-3 py-1.5 rounded-full border transition-colors ${activeTab === 'home' ? 'bg-white/10 border-white/20 text-white' : 'border-white/10 hover:bg-white/10'}`}>Home</button>
+                <button onClick={() => setActiveTab("features")} className={`px-3 py-1.5 rounded-full border transition-colors ${activeTab === 'features' ? 'bg-white/10 border-white/20 text-white' : 'border-white/10 hover:bg-white/10'}`}>Features</button>
+                <button onClick={() => setActiveTab("about")} className={`px-3 py-1.5 rounded-full border transition-colors ${activeTab === 'about' ? 'bg-white/10 border-white/20 text-white' : 'border-white/10 hover:bg-white/10'}`}>About</button>
               </div>
             </nav>
 
-            {/* Chat History */}
-            <div className="flex-1 overflow-y-auto w-full max-w-5xl mx-auto px-3 sm:px-6 md:px-8 pt-4 sm:pt-6 pb-6 flex flex-col gap-6 scroll-smooth">
-                {timeline.length === 0 ? (
-                    <motion.div 
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="flex flex-col items-center justify-center h-full text-center mt-10 sm:mt-16"
-                    >
-                        <div className="w-20 h-20 mb-6 rounded-full bg-gradient-to-br from-indigo-500/20 to-fuchsia-500/20 flex items-center justify-center">
-                            <Sparkles size={40} className="text-fuchsia-400 opacity-60" />
-                        </div>
-                        <h2 className="text-2xl sm:text-3xl font-medium mb-3">Welcome to Synapse AI</h2>
-                        <p className="text-slate-400 max-w-xl px-4">Hi there. Session is ready in the background. Ask anything, share your screen when needed, and I will help you step by step.</p>
-                    </motion.div>
-                ) : (
-                    timeline.map((item, idx) => (
+            {activeTab === 'home' && (
+              <>
+                {/* Chat History */}
+                <div className="flex-1 overflow-y-auto w-full max-w-5xl mx-auto px-3 sm:px-6 md:px-8 pt-4 sm:pt-6 pb-6 flex flex-col gap-6 scroll-smooth">
+                    {timeline.length === 0 ? (
+                        <motion.div 
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="flex flex-col items-center justify-center h-full text-center mt-10 sm:mt-16"
+                        >
+                            <div className="w-20 h-20 mb-6 rounded-full bg-gradient-to-br from-indigo-500/20 to-fuchsia-500/20 flex items-center justify-center">
+                                <Sparkles size={40} className="text-fuchsia-400 opacity-60" />
+                            </div>
+                            <h2 className="text-2xl sm:text-3xl font-medium mb-3">Welcome to Synapse AI</h2>
+                            <p className="text-slate-400 max-w-xl px-4">Hi there. Session is ready in the background. Ask anything, share your screen when needed, and I will help you step by step.</p>
+                        </motion.div>
+                    ) : (
+                        timeline.map((item, idx) => (
+                            <motion.div 
+                                initial={{ opacity: 0, y: 10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                key={idx} 
+                                className={`flex gap-4 ${item.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                            >
+                                {item.role !== 'user' && (
+                                    <div className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center mt-1 bg-gradient-to-tr from-indigo-600 to-fuchsia-600">
+                                        {item.role === 'system' ? <Code size={14} className="text-white" /> : <Sparkles size={16} className="text-white" />}
+                                    </div>
+                                )}
+                                
+                                <div className={`max-w-[80%] ${item.role === 'user' ? 'bg-[#282A2C] rounded-3xl rounded-tr-sm px-5 py-3.5' : item.role === 'system' ? 'bg-indigo-900/30 border border-indigo-500/20 text-indigo-200 rounded-2xl px-4 py-2 text-sm' : 'text-slate-200 text-lg leading-relaxed pt-1'}`}>
+                                    {item.text}
+                                </div>
+                            </motion.div>
+                        ))
+                    )}
+                    {isThinking && (
                         <motion.div 
                             initial={{ opacity: 0, y: 10 }}
                             animate={{ opacity: 1, y: 0 }}
-                            key={idx} 
-                            className={`flex gap-4 ${item.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                            className="flex gap-4 justify-start"
                         >
-                            {item.role !== 'user' && (
-                                <div className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center mt-1 bg-gradient-to-tr from-indigo-600 to-fuchsia-600">
-                                    {item.role === 'system' ? <Code size={14} className="text-white" /> : <Sparkles size={16} className="text-white" />}
-                                </div>
-                            )}
+                            <div className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center mt-1 bg-gradient-to-tr from-indigo-600 to-fuchsia-600">
+                                <Sparkles size={16} className="text-white" />
+                            </div>
                             
-                            <div className={`max-w-[80%] ${item.role === 'user' ? 'bg-[#282A2C] rounded-3xl rounded-tr-sm px-5 py-3.5' : item.role === 'system' ? 'bg-indigo-900/30 border border-indigo-500/20 text-indigo-200 rounded-2xl px-4 py-2 text-sm' : 'text-slate-200 text-lg leading-relaxed pt-1'}`}>
-                                {item.text}
+                            <div className="bg-transparent px-2 py-3.5 flex items-center gap-1.5 h-[48px]">
+                                <motion.div animate={{ opacity: [0.3, 1, 0.3], scale: [0.8, 1.2, 0.8] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0 }} className="w-2 h-2 rounded-full bg-indigo-400 shadow-[0_0_8px_rgba(129,140,248,0.6)]" />
+                                <motion.div animate={{ opacity: [0.3, 1, 0.3], scale: [0.8, 1.2, 0.8] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0.2 }} className="w-2 h-2 rounded-full bg-fuchsia-400 shadow-[0_0_8px_rgba(232,121,249,0.6)]" />
+                                <motion.div animate={{ opacity: [0.3, 1, 0.3], scale: [0.8, 1.2, 0.8] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0.4 }} className="w-2 h-2 rounded-full bg-indigo-400 shadow-[0_0_8px_rgba(129,140,248,0.6)]" />
                             </div>
                         </motion.div>
-                    ))
-                )}
-                <div ref={chatEndRef} />
-            </div>
+                    )}
+                    <div ref={chatEndRef} />
+                </div>
 
-            {/* Input Area */}
-            <div className="sticky bottom-0 left-0 w-full px-3 sm:px-6 pb-[max(10px,env(safe-area-inset-bottom))] pt-4 bg-gradient-to-t from-[#0b0c10] via-[#0b0c10]/85 to-transparent z-10">
-                <div className="max-w-4xl mx-auto relative">
-                    {/* Glowing shadow base */}
-                    <div className="absolute -inset-1 bg-gradient-to-r from-indigo-500/10 via-fuchsia-500/10 to-indigo-500/10 rounded-[32px] blur-xl opacity-50 transition-all duration-500 group-focus-within:opacity-100 group-focus-within:blur-2xl"></div>
-                    
-                    <div className="bg-[#1A1A1C]/80 backdrop-blur-xl rounded-[32px] p-2 flex flex-col shadow-2xl border border-white/5 transition-all focus-within:border-white/20 focus-within:bg-[#1E1F22]/90 relative z-10 group">
-                        <textarea
-                            disabled={wsState !== 'open'}
-                            value={input}
-                            onChange={(e) => setInput(e.target.value)}
-                            onKeyDown={(e) => {
-                                if (e.key === "Enter" && !e.shiftKey) {
-                                  e.preventDefault();
-                                  sendText();
-                                }
-                            }}
-                            rows={1}
-                            placeholder={wsState === 'open' ? "Ask about what's on your screen..." : wsState === "connecting" ? "Starting session..." : "Retry session to continue..."}
-                            className="w-full bg-transparent px-4 sm:px-6 py-3 sm:py-4 outline-none text-[14px] sm:text-[15px] placeholder:text-[#6E6E73] text-white disabled:opacity-50 resize-none overflow-hidden max-h-[150px]"
-                            style={{ minHeight: '60px' }}
-                        />
+                {/* Input Area */}
+                <div className="sticky bottom-0 left-0 w-full px-3 sm:px-6 pb-[max(10px,env(safe-area-inset-bottom))] pt-4 bg-gradient-to-t from-[#0b0c10] via-[#0b0c10]/85 to-transparent z-10">
+                    <div className="max-w-4xl mx-auto relative">
+                        {/* Glowing shadow base */}
+                        <div className="absolute -inset-1 bg-gradient-to-r from-indigo-500/10 via-fuchsia-500/10 to-indigo-500/10 rounded-[32px] blur-xl opacity-50 transition-all duration-500 group-focus-within:opacity-100 group-focus-within:blur-2xl"></div>
                         
-                        <div className="flex items-center justify-between px-2 sm:px-3 pb-2 pt-1 border-t border-white/5 mt-1 gap-2">
-                            <div className="flex items-center gap-1">
-                                <button className="p-2 rounded-full text-[#6E6E73] hover:bg-white/10 hover:text-white transition-colors" title="Attach file (mock)">
-                                    <Paperclip size={18} />
-                                </button>
-                                
-                                {/* Mic Toggle */}
-                                <button 
-                                    onClick={micOn ? stopMic : startMic} 
-                                    disabled={wsState !== "open"}
-                                    className={`p-2 rounded-full transition-all relative ${micOn ? 'text-rose-400 bg-rose-400/15' : 'text-[#6E6E73] hover:bg-white/10 hover:text-white disabled:opacity-50'}`}
-                                    title={micOn ? "Mute Microphone" : "Unmute Microphone"}
-                                >
-                                    <Mic size={18} />
-                                    {micOn && (
-                                        <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-rose-500 rounded-full animate-pulse border-2 border-[#1E1F22]"></span>
-                                    )}
-                                </button>
-
-                                {/* Screen Share Toggle */}
-                                <button 
-                                    onClick={screenOn ? stopScreen : startScreen} 
-                                    disabled={wsState !== "open"}
-                                    className={`p-2 rounded-full transition-all ${screenOn ? 'text-indigo-400 bg-indigo-400/15' : 'text-[#6E6E73] hover:bg-white/10 hover:text-white disabled:opacity-50'}`}
-                                    title={screenOn ? "Stop Screen Share" : "Start Screen Share"}
-                                >
-                                    <MonitorUp size={18} />
-                                </button>
-                                
-                                <div className="h-5 w-[1px] bg-white/10 mx-1"></div>
-
-                                {/* Interrupt Base */}
-                                <button 
-                                    onClick={interrupt} 
-                                    disabled={wsState !== "open"}
-                                    className="p-2 rounded-full text-[#6E6E73] hover:text-amber-400 hover:bg-amber-400/10 transition-colors disabled:opacity-50"
-                                    title="Interrupt Agent"
-                                >
-                                    <StopCircle size={18} />
-                                </button>
-                            </div>
-
-                            <div className="flex items-center gap-2">
-                                {sessionId && (
-                                     <button 
-                                        onClick={endSession} 
-                                        className="px-3 sm:px-4 py-2 rounded-full text-[11px] sm:text-xs font-semibold text-rose-400 bg-transparent hover:bg-rose-500/10 transition-colors border border-rose-500/20"
-                                    >
-                                        End Session
+                        <div className="bg-[#1A1A1C]/80 backdrop-blur-xl rounded-[32px] p-2 flex flex-col shadow-2xl border border-white/5 transition-all focus-within:border-white/20 focus-within:bg-[#1E1F22]/90 relative z-10 group">
+                            <textarea
+                                disabled={wsState !== 'open'}
+                                value={input}
+                                onChange={(e) => setInput(e.target.value)}
+                                onKeyDown={(e) => {
+                                    if (e.key === "Enter" && !e.shiftKey) {
+                                      e.preventDefault();
+                                      sendText();
+                                    }
+                                }}
+                                rows={1}
+                                placeholder={wsState === 'open' ? "Ask about what's on your screen..." : wsState === "connecting" ? "Starting session..." : "Retry session to continue..."}
+                                className="w-full bg-transparent px-4 sm:px-6 py-3 sm:py-4 outline-none text-[14px] sm:text-[15px] placeholder:text-[#6E6E73] text-white disabled:opacity-50 resize-none overflow-hidden max-h-[150px]"
+                                style={{ minHeight: '60px' }}
+                            />
+                            
+                            <div className="flex items-center justify-between px-2 sm:px-3 pb-2 pt-1 border-t border-white/5 mt-1 gap-2">
+                                <div className="flex items-center gap-1">
+                                    <button className="p-2 rounded-full text-[#6E6E73] hover:bg-white/10 hover:text-white transition-colors" title="Attach file (mock)">
+                                        <Paperclip size={18} />
                                     </button>
-                                )}
-                                
-                                <button 
-                                    onClick={sendText} 
-                                    disabled={wsState !== "open" || !input.trim()}
-                                    className={`w-10 h-10 flex items-center justify-center rounded-full transition-all ${input.trim() && wsState === 'open' ? 'bg-gradient-to-r from-indigo-500 to-fuchsia-500 text-white shadow-[0_0_15px_rgba(99,102,241,0.4)] hover:scale-105' : 'bg-white/5 text-[#6E6E73]'}`}
-                                >
-                                    <Send size={16} className="translate-x-[1px] translate-y-[-1px]" />
-                                </button>
+                                    
+                                    {/* Mic Toggle */}
+                                    <button 
+                                        onClick={micOn ? stopMic : startMic} 
+                                        disabled={wsState !== "open"}
+                                        className={`p-2 rounded-full transition-all relative ${micOn ? 'text-rose-400 bg-rose-400/15' : 'text-[#6E6E73] hover:bg-white/10 hover:text-white disabled:opacity-50'}`}
+                                        title={micOn ? "Mute Microphone" : "Unmute Microphone"}
+                                    >
+                                        <Mic size={18} />
+                                        {micOn && (
+                                            <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-rose-500 rounded-full animate-pulse border-2 border-[#1E1F22]"></span>
+                                        )}
+                                    </button>
+
+                                    {/* Screen Share Toggle */}
+                                    <button 
+                                        onClick={screenOn ? stopScreen : startScreen} 
+                                        disabled={wsState !== "open"}
+                                        className={`p-2 rounded-full transition-all ${screenOn ? 'text-indigo-400 bg-indigo-400/15' : 'text-[#6E6E73] hover:bg-white/10 hover:text-white disabled:opacity-50'}`}
+                                        title={screenOn ? "Stop Screen Share" : "Start Screen Share"}
+                                    >
+                                        <MonitorUp size={18} />
+                                    </button>
+                                    
+                                    <div className="h-5 w-[1px] bg-white/10 mx-1"></div>
+
+                                    {/* Interrupt Base */}
+                                    <button 
+                                        onClick={interrupt} 
+                                        disabled={wsState !== "open"}
+                                        className="p-2 rounded-full text-[#6E6E73] hover:text-amber-400 hover:bg-amber-400/10 transition-colors disabled:opacity-50"
+                                        title="Interrupt Agent"
+                                    >
+                                        <StopCircle size={18} />
+                                    </button>
+                                </div>
+
+                                <div className="flex items-center gap-2">
+                                    {sessionId && (
+                                         <button 
+                                            onClick={endSession} 
+                                            className="px-3 sm:px-4 py-2 rounded-full text-[11px] sm:text-xs font-semibold text-rose-400 bg-transparent hover:bg-rose-500/10 transition-colors border border-rose-500/20"
+                                        >
+                                            End Session
+                                        </button>
+                                    )}
+                                    
+                                    <button 
+                                        onClick={sendText} 
+                                        disabled={wsState !== "open" || !input.trim()}
+                                        className={`w-10 h-10 flex items-center justify-center rounded-full transition-all ${input.trim() && wsState === 'open' ? 'bg-gradient-to-r from-indigo-500 to-fuchsia-500 text-white shadow-[0_0_15px_rgba(99,102,241,0.4)] hover:scale-105' : 'bg-white/5 text-[#6E6E73]'}`}
+                                    >
+                                        <Send size={16} className="translate-x-[1px] translate-y-[-1px]" />
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>
                 </div>
-            </div>
+              </>
+            )}
+
+            {activeTab === 'features' && (
+               <div className="flex-1 overflow-y-auto w-full max-w-5xl mx-auto px-4 sm:px-6 md:px-8 py-8 sm:py-12 flex flex-col gap-6 text-slate-200">
+                    <h2 className="text-3xl font-bold gemini-gradient">Features</h2>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mt-4">
+                        <div className="bg-[#1E1F20]/80 p-6 rounded-2xl border border-white/5 hover:border-indigo-500/30 transition-colors">
+                            <h3 className="text-xl font-semibold mb-2 text-indigo-300 flex items-center gap-2"><Sparkles size={20}/> Live Agent Interactions</h3>
+                            <p className="text-slate-400">Interact in real-time with an AI agent equipped with voice synthesis and action planning. Get your answers instantly.</p>
+                        </div>
+                        <div className="bg-[#1E1F20]/80 p-6 rounded-2xl border border-white/5 hover:border-fuchsia-500/30 transition-colors">
+                            <h3 className="text-xl font-semibold mb-2 text-fuchsia-300 flex items-center gap-2"><MonitorUp size={20}/> Screen & Audio Vision</h3>
+                            <p className="text-slate-400">Share your desktop screen and microphone. The agent perceives the screen perfectly to assist you interactively.</p>
+                        </div>
+                        <div className="bg-[#1E1F20]/80 p-6 rounded-2xl border border-white/5 hover:border-emerald-500/30 transition-colors">
+                            <h3 className="text-xl font-semibold mb-2 text-emerald-300 flex items-center gap-2"><StopCircle size={20}/> Interruptible Voice</h3>
+                            <p className="text-slate-400">Halt the agent at any point during tasks, redirect its attention, and get better results on the fly.</p>
+                        </div>
+                        <div className="bg-[#1E1F20]/80 p-6 rounded-2xl border border-white/5 hover:border-amber-500/30 transition-colors">
+                            <h3 className="text-xl font-semibold mb-2 text-amber-300 flex items-center gap-2"><FileText size={20}/> Action Plan Display</h3>
+                            <p className="text-slate-400">View what the agent is thinking, planning, and executing behind the scenes inside the sidebar panel.</p>
+                        </div>
+                    </div>
+               </div>
+            )}
+
+            {activeTab === 'about' && (
+               <div className="flex-1 overflow-y-auto w-full max-w-4xl mx-auto px-4 sm:px-6 md:px-8 py-8 sm:py-12 flex flex-col gap-6 text-slate-200">
+                    <h2 className="text-3xl font-bold gemini-gradient">About Aryan</h2>
+                    <div className="bg-[#1E1F20]/80 p-6 sm:p-8 rounded-2xl border border-white/5 shadow-xl">
+                        <p className="text-lg text-slate-300 leading-relaxed mb-6">
+                            Aryan Raikwar (also known as <strong>Aryan Zone</strong> or <strong>aaryaninvincible</strong>) is an innovative IoT & Full Stack Developer, AI Engineer, and a Tech Content Creator. Passionate about innovation and focusing on solving real-world challenges with cutting-edge technology.
+                        </p>
+                        <h4 className="text-lg font-semibold text-indigo-300 mb-3 flex items-center gap-2"><Activity size={18}/> Professional Background</h4>
+                        <ul className="list-disc leading-relaxed text-slate-400 ml-5 mb-6">
+                            <li><strong>IoT Development:</strong> Built scalable IoT solutions at Krishi Verse (Ouranos Robotics).</li>
+                            <li><strong>Full-Stack Development:</strong> Created efficient and scalable web applications at Inocrypt Infosoft.</li>
+                            <li><strong>Tech Content Creator:</strong> Over 13K+ followers on Instagram (@codesworld.exe / aaryaninvincible) with 2M+ views and 100M+ reach.</li>
+                        </ul>
+                        
+                        <h4 className="text-lg font-semibold text-fuchsia-300 mb-3 flex items-center gap-2"><Code size={18}/> Skills & Technologies</h4>
+                        <p className="text-slate-400 mb-6 leading-relaxed bg-[#1A1A1C] p-4 rounded-xl border border-white/5">
+                            JavaScript, Python, PHP, React.js, Node.js, Flask, AI/ML, NLP, SQL, MongoDB, IoT, AWS, Shopify.
+                        </p>
+
+                        <h4 className="text-lg font-semibold text-emerald-300 mb-3 flex items-center gap-2"><Sparkles size={18}/> Key Projects</h4>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-8">
+                            <div className="bg-[#1A1A1C] p-3 rounded-xl border border-white/5 text-sm text-slate-400">Voltros.in E-commerce Platform</div>
+                            <div className="bg-[#1A1A1C] p-3 rounded-xl border border-white/5 text-sm text-slate-400">Smart Agriculture Device (IoT)</div>
+                            <div className="bg-[#1A1A1C] p-3 rounded-xl border border-white/5 text-sm text-slate-400">AI Career Counseling Platform</div>
+                            <div className="bg-[#1A1A1C] p-3 rounded-xl border border-white/5 text-sm text-slate-400">Open-Source Python POS System</div>
+                            <div className="bg-[#1A1A1C] p-3 rounded-xl border border-white/5 text-sm text-slate-400">React IoT Dashboard</div>
+                            <div className="bg-[#1A1A1C] p-3 rounded-xl border border-white/5 text-sm text-slate-400">2D Games: Flappy Neon, Dino Dash etc.</div>
+                        </div>
+
+                        <div className="pt-6 border-t border-white/10 flex flex-wrap gap-4 items-center justify-between">
+                            <p className="text-sm text-slate-400">Let's connect!</p>
+                            <div className="flex items-center gap-3">
+                                <a href="https://portfolio-eta-lake-19.vercel.app/" target="_blank" rel="noreferrer" className="px-5 py-2.5 bg-indigo-500/20 text-indigo-300 rounded-full hover:bg-indigo-500/30 transition-colors text-sm font-semibold tracking-wide border border-indigo-500/20">Full Portfolio</a>
+                                <a href="https://instagram.com/aaryaninvincible" target="_blank" rel="noreferrer" className="px-5 py-2.5 bg-fuchsia-500/20 text-fuchsia-300 rounded-full hover:bg-fuchsia-500/30 transition-colors text-sm font-semibold tracking-wide border border-fuchsia-500/20">Instagram</a>
+                            </div>
+                        </div>
+                    </div>
+               </div>
+            )}
         </main>
 
         {/* Right Sidebar - Action Plan & Activity */}
@@ -789,17 +883,6 @@ export default function App() {
                             )}
                         </div>
 
-                        {/* Raw JSON Toggle */}
-                        {actionPlan && (
-                            <div>
-                                <h3 className="text-xs uppercase text-slate-500 tracking-wider mb-3 font-semibold flex items-center gap-2">
-                                    <Code size={14} /> Raw Packet
-                                </h3>
-                                <div className="bg-black/30 rounded-xl p-3 overflow-x-auto text-[10px] font-mono text-emerald-400 border border-white/5">
-                                    <pre className="whitespace-pre-wrap break-words">{JSON.stringify(actionPlan, null, 2)}</pre>
-                                </div>
-                            </div>
-                         )}
                     </div>
                 </motion.aside>
                 </>
