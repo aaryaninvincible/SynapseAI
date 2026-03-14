@@ -7,7 +7,7 @@ from typing import Any
 
 from .models import AgentReply
 
-PROMPT = """You are ScreenSense Support Copilot.
+PROMPT = """You are Synapse AI Support Copilot.
 Return concise troubleshooting guidance and output a JSON action plan.
 Always prefer reversible steps and ask for confirmation when uncertain."""
 
@@ -261,4 +261,13 @@ class GeminiLiveAdapter:
         return {
             "spoken_text": cleaned,
             "action_plan": self._default_action_plan(),
+        }
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "gemini_api_key_configured": bool(self.api_key),
+            "gemini_client_ready": self._client is not None,
+            "live_model": self.live_model,
+            "fallback_model": self.fallback_model,
+            "mode": "gemini" if self._client is not None else "mock",
         }

@@ -20,7 +20,7 @@ gemini = GeminiLiveAdapter(
 persistence = PersistenceService(project_id=settings.gcp_project_id, bucket_name=settings.gcs_bucket_name)
 sessions = SessionManager(gemini=gemini, persistence=persistence)
 
-app = FastAPI(title="ScreenSense Agent API", version="0.1.0")
+app = FastAPI(title="Synapse AI Agent API", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins if settings.allowed_origins else ["*"],
@@ -31,8 +31,8 @@ app.add_middleware(
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health() -> dict[str, object]:
+    return {"status": "ok", "agent": "synapse-ai", **gemini.status()}
 
 
 @app.post("/session/start", response_model=StartSessionResponse)
