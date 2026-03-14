@@ -13,7 +13,8 @@ from .session_manager import SessionManager
 
 settings = get_settings()
 gemini = GeminiLiveAdapter(
-    api_key=settings.google_api_key,
+    api_keys=settings.google_api_keys,
+    openrouter_api_key=settings.openrouter_api_key,
     live_model=settings.gemini_live_model,
     fallback_model=settings.gemini_fallback_model,
 )

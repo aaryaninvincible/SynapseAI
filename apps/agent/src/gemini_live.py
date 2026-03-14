@@ -14,24 +14,42 @@ If asked who built you / who made you / your developer / creator identity, answe
 
 
 class GeminiLiveAdapter:
-    def __init__(self, api_key: str, live_model: str, fallback_model: str) -> None:
-        self.api_key = api_key
+    def __init__(self, api_keys: list[str], openrouter_api_key: str, live_model: str, fallback_model: str) -> None:
+        self.api_keys = api_keys
+        self.openrouter_api_key = openrouter_api_key
         self.live_model = live_model
         self.fallback_model = fallback_model
-        self._client = None
+        self._clients: list[Any] = []
+        self._current_client_idx = 0
         self._live_sessions: dict[str, Any] = {}
         self._live_lock = asyncio.Lock()
 
-        if api_key:
-            try:
-                from google import genai
+        for key in api_keys:
+            if key:
+                try:
+                    from google import genai
 
-                self._client = genai.Client(api_key=api_key)
-            except Exception:
-                self._client = None
+                    self._clients.append(genai.Client(api_key=key))
+                except Exception:
+                    pass
+
+    @property
+    def _client(self) -> Any | None:
+        if not self._clients:
+            return None
+        return self._clients[self._current_client_idx]
+
+    def _rotate_client(self) -> None:
+        if self._clients:
+            self._current_client_idx = (self._current_client_idx + 1) % len(self._clients)
+            print("Rotated Gemini client to key index:", self._current_client_idx)
 
     async def generate(self, session_id: str, user_text: str, latest_frame: str | None = None) -> AgentReply:
         if not self._client:
+            if self.openrouter_api_key:
+                ret = await self._generate_openrouter(user_text, latest_frame)
+                if ret:
+                    return ret
             return self._mock_reply(user_text, "Gemini client not initialized. Check your GOOGLE_API_KEY inside apps/agent/.env.")
 
         live_session = await self._ensure_live_session(session_id)
@@ -105,6 +123,13 @@ class GeminiLiveAdapter:
             )
         except Exception as e:
             print("Generate exception:", e)
+            if self.openrouter_api_key:
+                print("Falling back to OpenRouter...")
+                ret = await self._generate_openrouter(user_text, latest_frame)
+                if ret:
+                    return ret
+            if "RESOURCE_EXHAUSTED" in str(e):
+                self._rotate_client()
             return self._mock_reply(user_text, str(e))
 
     async def send_video_frame(self, session_id: str, frame_data_url: str) -> bool:
@@ -216,6 +241,68 @@ class GeminiLiveAdapter:
         spoken = self._apply_identity_override(user_text, spoken)
         return AgentReply(spoken_text=spoken, action_plan=self._default_action_plan())
 
+    async def _generate_openrouter(self, user_text: str, latest_frame: str | None) -> AgentReply | None:
+        if not self.openrouter_api_key:
+            return None
+        
+        url = "https://openrouter.ai/api/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.openrouter_api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        contents: list[dict[str, Any]] = [
+            {"type": "text", "text": f"{PROMPT}\n\nUser message:\n{user_text}\n\nYou must return valid JSON."}
+        ]
+        
+        if latest_frame and latest_frame.startswith("data:"):
+            contents.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": latest_frame
+                }
+            })
+
+        data = {
+            "model": "google/gemini-2.5-flash",
+            "messages": [
+                {"role": "user", "content": contents}
+            ],
+            "response_format": {"type": "json_object"}
+        }
+        
+        import urllib.request
+        import json
+        
+        req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers=headers, method="POST")
+        loop = asyncio.get_event_loop()
+        
+        def _make_req() -> str | None:
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    return resp.read().decode("utf-8")
+            except Exception as e:
+                print("OpenRouter error:", e)
+                return None
+                
+        resp_text = await loop.run_in_executor(None, _make_req)
+        if not resp_text:
+            return None
+            
+        try:
+            resp_json = json.loads(resp_text)
+            content = resp_json["choices"][0]["message"]["content"]
+            parsed = self._parse_or_wrap(content)
+            spoken_text = parsed.get("spoken_text", "I analyzed your request. Let's try the next step.")
+            spoken_text = self._apply_identity_override(user_text, spoken_text)
+            return AgentReply(
+                spoken_text=spoken_text,
+                action_plan=parsed.get("action_plan", self._default_action_plan())
+            )
+        except Exception as e:
+            print("OpenRouter parsing error:", e)
+            return None
+
     def _apply_identity_override(self, user_text: str, spoken_text: str) -> str:
         normalized = user_text.lower()
         if any(
@@ -282,9 +369,9 @@ class GeminiLiveAdapter:
 
     def status(self) -> dict[str, Any]:
         return {
-            "gemini_api_key_configured": bool(self.api_key),
-            "gemini_client_ready": self._client is not None,
+            "gemini_api_key_configured": bool(self.api_keys) or bool(self.openrouter_api_key),
+            "gemini_client_ready": (self._client is not None) or bool(self.openrouter_api_key),
             "live_model": self.live_model,
             "fallback_model": self.fallback_model,
-            "mode": "gemini" if self._client is not None else "mock",
+            "mode": "gemini" if self._client is not None else ("openrouter" if self.openrouter_api_key else "mock"),
         }
