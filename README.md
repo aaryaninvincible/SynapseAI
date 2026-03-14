@@ -65,3 +65,19 @@ Next: replace the mock branch with full Gemini Live streaming audio/video IO.
 
 - Cloud Run script: `infra/cloudrun/deploy.ps1`
 - Notes: `infra/cloudrun/README.md`
+- Render Blueprint: `render.yaml` (backend)
+
+### Render Backend Quick Deploy
+
+1. Push this repo to GitHub.
+2. In Render, click **New +** -> **Blueprint** and select this repo.
+3. In the created `synapse-agent` service, set secret env var `GOOGLE_API_KEY`.
+4. Deploy and copy the backend URL (for example `https://synapse-agent.onrender.com`).
+5. Set frontend API base on Vercel:
+
+```bash
+cd apps/web
+npx vercel env rm VITE_AGENT_BASE_URL production -y
+npx vercel env add VITE_AGENT_BASE_URL production --value https://<your-render-url>
+npx vercel deploy --prod -y
+```
