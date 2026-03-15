@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Mic, MonitorUp, Code, StopCircle, FileText, Send, Paperclip, ChevronRight, Sparkles, Activity, Volume2, VolumeX, MessageSquare, Trash2, LogOut, Sun, Moon } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { auth, db } from "./firebase";
-import { signInWithRedirect, GoogleAuthProvider, onAuthStateChanged, signOut, User } from "firebase/auth";
+import { signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, User } from "firebase/auth";
 import { collection, query, where, getDocs, setDoc, doc, deleteDoc } from "firebase/firestore";
 
 type ServerEvent = {
@@ -63,6 +63,7 @@ export default function App() {
   const [executingStepIndex, setExecutingStepIndex] = useState<number | null>(null);
   const [actionRunnerOn, setActionRunnerOn] = useState(false);
   const [remoteStartUrl, setRemoteStartUrl] = useState("https://example.com");
+  const [voiceTypingOn, setVoiceTypingOn] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -77,6 +78,7 @@ export default function App() {
   const particleCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const speechOnRef = useRef(false);
   const actionPlanSigRef = useRef<string>("");
+  const recognitionRef = useRef<any>(null);
 
   const wsUrl = useMemo(() => {
     if (!sessionId) return "";
@@ -100,6 +102,13 @@ export default function App() {
     typeof navigator !== "undefined" &&
     !!navigator.mediaDevices &&
     typeof (navigator.mediaDevices as MediaDevices & { getDisplayMedia?: unknown }).getDisplayMedia === "function";
+  const supportsCameraCapture =
+    typeof navigator !== "undefined" &&
+    !!navigator.mediaDevices &&
+    typeof navigator.mediaDevices.getUserMedia === "function";
+  const supportsVoiceTyping =
+    typeof window !== "undefined" &&
+    (("SpeechRecognition" in window) || ("webkitSpeechRecognition" in window));
 
   const requestSessionEnd = (targetSessionId: string, preferBeacon = false) => {
     const url = `${API_BASE}/session/${targetSessionId}/end`;
@@ -121,7 +130,7 @@ export default function App() {
         try {
           const q = query(collection(db, "history"), where("uid", "==", u.uid));
           const snap = await getDocs(q);
-          const sessions: ChatSession[] = snap.docs.map(d => d.data() as ChatSession).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+          const sessions: ChatSession[] = snap.docs.map(d => d.data() as ChatSession).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
           setSavedSessions(sessions);
         } catch (e) {
           console.error("Failed to load history:", e);
@@ -146,7 +155,7 @@ export default function App() {
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    
+
     if (sessionIdRef.current && timeline.length > 0 && user) {
       setSavedSessions(prev => {
         const existingId = prev.findIndex(s => s.id === sessionIdRef.current);
@@ -164,10 +173,10 @@ export default function App() {
         } else {
           updated.unshift(newSession);
         }
-        
+
         // save to firestore async
         setDoc(doc(db, "history", newSession.id), newSession).catch(console.error);
-        
+
         return updated;
       });
     }
@@ -242,6 +251,10 @@ export default function App() {
       recorderRef.current?.stop();
       wsRef.current?.close();
       window.speechSynthesis.cancel();
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+        recognitionRef.current = null;
+      }
     };
   }, []);
 
@@ -428,10 +441,44 @@ export default function App() {
     wsRef.current.send(JSON.stringify({ type, payload }));
   };
 
+  const runQuickCommand = (rawText: string): boolean => {
+    const text = rawText.trim();
+    const lower = text.toLowerCase();
+    const openMatch = lower.match(/^(open|go to)\s+(.+)$/);
+    if (openMatch) {
+      const targetRaw = text.replace(/^(open|go to)\s+/i, "").trim();
+      const target = targetRaw.toLowerCase();
+      let url = targetRaw;
+      if (target.includes("chatgpt") || target.includes("chat gpt")) {
+        url = "https://chatgpt.com/";
+      } else if (!/^https?:\/\//i.test(targetRaw)) {
+        url = `https://${targetRaw.replace(/\s+/g, "")}`;
+      }
+      window.open(url, "_blank", "noopener,noreferrer");
+      append("system", `Opened ${url}`);
+      return true;
+    }
+
+    const searchMatch = lower.match(/^(search|find)\s+(.+)$/);
+    if (searchMatch) {
+      const query = text.replace(/^(search|find)\s+/i, "").trim();
+      if (!query) return false;
+      const url = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+      window.open(url, "_blank", "noopener,noreferrer");
+      append("system", `Searching for "${query}"`);
+      return true;
+    }
+    return false;
+  };
+
   const sendText = () => {
     if (!input.trim()) return;
     const text = input.trim();
     append("user", text);
+    if (runQuickCommand(text)) {
+      setInput("");
+      return;
+    }
     const normalized = text.toLowerCase();
     if (
       normalized.includes("who build") ||
@@ -460,26 +507,69 @@ export default function App() {
     window.speechSynthesis.cancel();
   };
 
-  const startScreen = async () => {
-    if (!supportsScreenCapture) {
-      append("system", "Screen share is not supported in this browser.");
+  const startVoiceTyping = () => {
+    if (!supportsVoiceTyping) {
+      append("system", "Voice typing is not supported in this browser.");
       return;
     }
-    if (isMobileDevice) {
-      append("system", "Phone browsers usually block full screen-share capture. Please use desktop for screen sharing.");
+    const SpeechRecognitionCtor = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognitionCtor) return;
+    const recognition = new SpeechRecognitionCtor();
+    recognition.lang = "en-US";
+    recognition.interimResults = true;
+    recognition.continuous = true;
+    recognition.onresult = (event: any) => {
+      let transcript = "";
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        transcript += event.results[i][0].transcript;
+      }
+      setInput(transcript.trim());
+    };
+    recognition.onerror = () => {
+      append("system", "Voice typing permission blocked or unavailable.");
+      setVoiceTypingOn(false);
+    };
+    recognition.onend = () => {
+      setVoiceTypingOn(false);
+      recognitionRef.current = null;
+    };
+    recognition.start();
+    recognitionRef.current = recognition;
+    setVoiceTypingOn(true);
+  };
+
+  const stopVoiceTyping = () => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      recognitionRef.current = null;
+    }
+    setVoiceTypingOn(false);
+  };
+
+  const startScreen = async () => {
+    if (!supportsScreenCapture && !supportsCameraCapture) {
+      append("system", "Visual capture is not supported in this browser.");
       return;
     }
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: 5 },
-        audio: false,
-      });
+      const stream = isMobileDevice || !supportsScreenCapture
+        ? await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment", frameRate: { ideal: 8, max: 12 } },
+          audio: false,
+        })
+        : await navigator.mediaDevices.getDisplayMedia({
+          video: { frameRate: 5 },
+          audio: false,
+        });
       screenStreamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
       }
       setScreenOn(true);
+      if (isMobileDevice) {
+        append("system", "Phone mode: using camera share as visual context.");
+      }
 
       frameTimerRef.current = window.setInterval(() => {
         if (!videoRef.current) return;
@@ -494,11 +584,11 @@ export default function App() {
       }, 1200);
 
       stream.getVideoTracks()[0].onended = () => {
-          stopScreen();
+        stopScreen();
       };
     } catch (e) {
-        console.error("Screen share cancelled or failed.", e);
-        append("system", "Screen share was cancelled or blocked by the browser.");
+      console.error("Screen share cancelled or failed.", e);
+      append("system", "Screen share was cancelled or blocked by the browser.");
     }
   };
 
@@ -532,8 +622,19 @@ export default function App() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       micStreamRef.current = stream;
-
-      const recorder = new MediaRecorder(stream);
+      if (typeof MediaRecorder === "undefined") {
+        append("system", "Live mic streaming is unavailable on this browser. Use voice typing instead.");
+        return;
+      }
+      const preferredMimeTypes = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"];
+      const supportedMimeType = preferredMimeTypes.find((t) => {
+        try {
+          return MediaRecorder.isTypeSupported(t);
+        } catch {
+          return false;
+        }
+      });
+      const recorder = supportedMimeType ? new MediaRecorder(stream, { mimeType: supportedMimeType }) : new MediaRecorder(stream);
       recorderRef.current = recorder;
       recorder.ondataavailable = async (event) => {
         if (!event.data || event.data.size === 0) return;
@@ -580,7 +681,7 @@ export default function App() {
 
   const newChat = async () => {
     if (sessionIdRef.current) {
-        await fetch(`${API_BASE}/session/${sessionIdRef.current}/end`, { method: "POST" }).catch(() => null);
+      await fetch(`${API_BASE}/session/${sessionIdRef.current}/end`, { method: "POST" }).catch(() => null);
     }
     if (screenOn) stopScreen();
     if (micOn) stopMic();
@@ -599,13 +700,13 @@ export default function App() {
 
   const loadSession = async (session: ChatSession) => {
     if (sessionIdRef.current && sessionIdRef.current !== session.id) {
-        await fetch(`${API_BASE}/session/${sessionIdRef.current}/end`, { method: "POST" }).catch(() => null);
+      await fetch(`${API_BASE}/session/${sessionIdRef.current}/end`, { method: "POST" }).catch(() => null);
     }
     if (screenOn) stopScreen();
     if (micOn) stopMic();
     wsRef.current?.close();
     wsRef.current = null;
-    
+
     setTimeline(session.timeline);
     setSessionId(session.id);
     sessionIdRef.current = session.id;
@@ -623,7 +724,7 @@ export default function App() {
       return updated;
     });
     if (id === sessionIdRef.current) {
-        newChat();
+      newChat();
     }
   };
 
@@ -753,7 +854,7 @@ export default function App() {
       className={`${isLightMode ? "theme-light" : "theme-dark"} h-[100svh] w-full flex overflow-hidden relative ${isLightMode ? "text-slate-800 selection:bg-purple-300/50" : "text-[#E3E3E3] selection:bg-indigo-500/30"}`}
       style={{ fontFamily: "'Space Grotesk', sans-serif", backgroundColor: isLightMode ? "#eef3ff" : "#0b0c10" }}
     >
-        <style>
+      <style>
         {`
             ::-webkit-scrollbar {
               width: 8px;
@@ -829,579 +930,594 @@ export default function App() {
                 .hidden-xs { display: none !important; }
             }
         `}
-        </style>
+      </style>
 
-        <AnimatePresence>
-          {isBooting && (
-            <motion.div
-              initial={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.45 }}
-              className="absolute inset-0 z-[100] bg-[#09050f] flex items-center justify-center"
+      <AnimatePresence>
+        {isBooting && (
+          <motion.div
+            initial={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.45 }}
+            className="absolute inset-0 z-[100] bg-[#09050f] flex items-center justify-center"
+          >
+            <div className="relative w-28 h-28">
+              <motion.div
+                animate={{ rotate: 360 }}
+                transition={{ repeat: Infinity, duration: 1.3, ease: "linear" }}
+                className="absolute inset-0 rounded-full border-4 border-purple-500/30 border-t-purple-300"
+              />
+              <motion.div
+                animate={{ rotate: -360 }}
+                transition={{ repeat: Infinity, duration: 2, ease: "linear" }}
+                className="absolute inset-3 rounded-full border-4 border-fuchsia-500/25 border-r-violet-400"
+              />
+              <motion.div
+                animate={{ scale: [0.9, 1.1, 0.9], opacity: [0.6, 1, 0.6] }}
+                transition={{ repeat: Infinity, duration: 1.2, ease: "easeInOut" }}
+                className="absolute inset-[34%] rounded-full bg-gradient-to-br from-violet-300 to-fuchsia-500 shadow-[0_0_32px_rgba(168,85,247,0.6)]"
+              />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Ambient Background Effects */}
+      <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
+        <canvas ref={particleCanvasRef} className="absolute inset-0 w-full h-full opacity-70" />
+        <motion.div
+          animate={{
+            rotate: [0, 360],
+            scale: [1, 1.2, 1],
+            opacity: [0.1, 0.2, 0.1]
+          }}
+          transition={{ duration: 25, repeat: Infinity, ease: "linear" }}
+          className="absolute -top-[20%] -left-[10%] w-[60%] h-[60%] rounded-full bg-indigo-500/20 blur-[120px]"
+          style={{ willChange: "transform, opacity", transform: "translateZ(0)" }}
+        />
+        <motion.div
+          animate={{
+            rotate: [360, 0],
+            scale: [1, 1.3, 1],
+            opacity: [0.1, 0.25, 0.1]
+          }}
+          transition={{ duration: 30, repeat: Infinity, ease: "linear" }}
+          className="absolute top-[40%] -right-[10%] w-[50%] h-[50%] rounded-full bg-fuchsia-500/20 blur-[120px]"
+          style={{ willChange: "transform, opacity", transform: "translateZ(0)" }}
+        />
+      </div>
+
+      {/* Main Chat Area */}
+      <main className="flex-1 flex flex-col relative z-10 min-h-[100svh] overflow-hidden transition-all duration-500">
+        {/* Header */}
+        <header className="px-3 sm:px-6 lg:px-8 pt-[max(12px,env(safe-area-inset-top))] pb-3 sm:py-5 flex items-center justify-between gap-2 border-b border-white/5 bg-[#0b0c10]/75 backdrop-blur-md">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <img src="/favicon.png" alt="Synapse AI Logo" className="w-9 h-9 rounded-xl object-cover object-center shadow-lg border border-white/20 bg-white/5" />
+            <h1 className="text-lg sm:text-xl font-medium tracking-wide">
+              <span className="gemini-gradient font-bold">Synapse</span>
+              <span className="hidden sm:inline gemini-gradient font-bold ml-1">AI</span>
+            </h1>
+          </div>
+
+          <div className="flex items-center gap-2 sm:gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                setSpeechOn((prev) => !prev);
+                if (speechOnRef.current) {
+                  window.speechSynthesis.cancel();
+                }
+              }}
+              className={`px-2.5 sm:px-3 py-2 rounded-full border text-xs sm:text-sm transition ${speechOn ? "border-emerald-400/40 text-emerald-300 bg-emerald-500/10" : "border-white/20 text-slate-300 hover:bg-white/10"}`}
             >
-              <div className="relative w-28 h-28">
-                <motion.div
-                  animate={{ rotate: 360 }}
-                  transition={{ repeat: Infinity, duration: 1.3, ease: "linear" }}
-                  className="absolute inset-0 rounded-full border-4 border-purple-500/30 border-t-purple-300"
-                />
-                <motion.div
-                  animate={{ rotate: -360 }}
-                  transition={{ repeat: Infinity, duration: 2, ease: "linear" }}
-                  className="absolute inset-3 rounded-full border-4 border-fuchsia-500/25 border-r-violet-400"
-                />
-                <motion.div
-                  animate={{ scale: [0.9, 1.1, 0.9], opacity: [0.6, 1, 0.6] }}
-                  transition={{ repeat: Infinity, duration: 1.2, ease: "easeInOut" }}
-                  className="absolute inset-[34%] rounded-full bg-gradient-to-br from-violet-300 to-fuchsia-500 shadow-[0_0_32px_rgba(168,85,247,0.6)]"
-                />
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Ambient Background Effects */}
-        <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
-            <canvas ref={particleCanvasRef} className="absolute inset-0 w-full h-full opacity-70" />
-            <motion.div 
-              animate={{ 
-                rotate: [0, 360],
-                scale: [1, 1.2, 1],
-                opacity: [0.1, 0.2, 0.1]
-              }}
-              transition={{ duration: 25, repeat: Infinity, ease: "linear" }}
-              className="absolute -top-[20%] -left-[10%] w-[60%] h-[60%] rounded-full bg-indigo-500/20 blur-[120px]" 
-              style={{ willChange: "transform, opacity", transform: "translateZ(0)" }}
-            />
-            <motion.div 
-              animate={{ 
-                rotate: [360, 0],
-                scale: [1, 1.3, 1],
-                opacity: [0.1, 0.25, 0.1]
-              }}
-              transition={{ duration: 30, repeat: Infinity, ease: "linear" }}
-              className="absolute top-[40%] -right-[10%] w-[50%] h-[50%] rounded-full bg-fuchsia-500/20 blur-[120px]" 
-              style={{ willChange: "transform, opacity", transform: "translateZ(0)" }}
-            />
-        </div>
-
-        {/* Main Chat Area */}
-        <main className="flex-1 flex flex-col relative z-10 min-h-[100svh] overflow-hidden transition-all duration-500">
-            {/* Header */}
-            <header className="px-3 sm:px-6 lg:px-8 pt-[max(12px,env(safe-area-inset-top))] pb-3 sm:py-5 flex items-center justify-between gap-2 border-b border-white/5 bg-[#0b0c10]/75 backdrop-blur-md">
-                <div className="flex items-center gap-2 sm:gap-3">
-                    <img src="/favicon.png" alt="Synapse AI Logo" className="w-9 h-9 rounded-xl object-cover object-center shadow-lg border border-white/20 bg-white/5" />
-                    <h1 className="text-lg sm:text-xl font-medium tracking-wide">
-                        <span className="gemini-gradient font-bold">Synapse</span>
-                        <span className="hidden sm:inline gemini-gradient font-bold ml-1">AI</span>
-                    </h1>
-                </div>
-                
-                <div className="flex items-center gap-2 sm:gap-3">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSpeechOn((prev) => !prev);
-                        if (speechOnRef.current) {
-                          window.speechSynthesis.cancel();
-                        }
-                      }}
-                      className={`px-2.5 sm:px-3 py-2 rounded-full border text-xs sm:text-sm transition ${speechOn ? "border-emerald-400/40 text-emerald-300 bg-emerald-500/10" : "border-white/20 text-slate-300 hover:bg-white/10"}`}
-                    >
-                      <span className="inline-flex items-center gap-1.5">
-                        {speechOn ? <Volume2 size={14} /> : <VolumeX size={14} />}
-                        <span className="hidden-xs">Voice {speechOn ? "On" : "Off"}</span>
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setIsLightMode((prev) => !prev)}
-                      className={`px-2.5 sm:px-3 py-2 rounded-full border text-xs sm:text-sm transition ${isLightMode ? "border-amber-300/70 text-amber-600 bg-amber-200/40" : "border-indigo-300/30 text-indigo-200 bg-indigo-500/10 hover:bg-indigo-500/20"}`}
-                    >
-                      <span className="inline-flex items-center gap-1.5">
-                        {isLightMode ? <Moon size={14} /> : <Sun size={14} />}
-                        <span className="hidden-xs">{isLightMode ? "Dark" : "Light"}</span>
-                      </span>
-                    </button>
-                    {wsState === "idle" && (
-                      <button onClick={() => connectWs()} className="hidden sm:inline text-sm px-4 py-1.5 rounded-full border border-white/20 hover:bg-white/10 transition">
-                        Reconnect
-                      </button>
-                    )}
-                    <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 rounded-full border border-white/10 hover:bg-white/10 transition text-slate-300">
-                        <Activity size={18} />
-                    </button>
-
-                    <div className="w-[1px] h-6 bg-white/10 mx-1"></div>
-
-                    {deferredPrompt && (
-                        <button onClick={async () => {
-                            deferredPrompt.prompt();
-                            const outcome = await deferredPrompt.userChoice;
-                            if (outcome.outcome === 'accepted') {
-                                setDeferredPrompt(null);
-                            }
-                        }} className="px-3 py-1.5 rounded-full bg-fuchsia-500/20 text-fuchsia-300 hover:bg-fuchsia-500/30 transition-colors border border-fuchsia-500/20 text-xs sm:text-sm font-semibold flex items-center gap-1">
-                            Install
-                        </button>
-                    )}
-
-                    {authLoading ? (
-                        <div className="w-6 h-6 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin ml-1"></div>
-                    ) : user ? (
-                        <div className="flex items-center gap-2">
-                            {user.photoURL && <img src={user.photoURL} alt="Avatar" className="w-7 h-7 rounded-full ml-1" />}
-                            <button onClick={() => signOut(auth)} className="hidden sm:flex p-2 flex-shrink-0 rounded-full hover:bg-rose-500/20 text-rose-400 transition" title="Sign Out">
-                                <LogOut size={16} />
-                            </button>
-                        </div>
-                    ) : (
-                        <button onClick={() => signInWithRedirect(auth, new GoogleAuthProvider())} className="px-3 py-1.5 rounded-full bg-white text-black text-xs sm:text-sm font-bold hover:bg-slate-200 transition whitespace-nowrap">
-                            Sign In
-                        </button>
-                    )}
-                </div>
-            </header>
-            <nav className="px-2 sm:px-6 lg:px-8 py-2 border-b border-white/5 bg-[#0f1016]/70 backdrop-blur-md flex items-center justify-between gap-1">
-              <div className={`flex items-center gap-1.5 overflow-x-auto whitespace-nowrap text-xs sm:text-sm scrollbar-none no-scrollbar py-0.5 ${isLightMode ? "text-slate-700" : "text-slate-300"}`}>
-                <button onClick={() => setActiveTab("home")} className={`px-2.5 py-1.5 rounded-full border transition-colors ${activeTab === 'home' ? (isLightMode ? 'bg-violet-100 border-violet-300 text-violet-700' : 'bg-white/10 border-white/20 text-white') : (isLightMode ? 'border-violet-200 hover:bg-violet-50' : 'border-white/10 hover:bg-white/10')}`}>Home</button>
-                <button onClick={() => setActiveTab("history")} className={`px-2.5 py-1.5 rounded-full border transition-colors ${activeTab === 'history' ? (isLightMode ? 'bg-violet-100 border-violet-300 text-violet-700' : 'bg-white/10 border-white/20 text-white') : (isLightMode ? 'border-violet-200 hover:bg-violet-50' : 'border-white/10 hover:bg-white/10')}`}>History</button>
-                <button onClick={() => setActiveTab("features")} className={`px-2.5 py-1.5 rounded-full border transition-colors ${activeTab === 'features' ? (isLightMode ? 'bg-violet-100 border-violet-300 text-violet-700' : 'bg-white/10 border-white/20 text-white') : (isLightMode ? 'border-violet-200 hover:bg-violet-50' : 'border-white/10 hover:bg-white/10')}`}>Features</button>
-                <button onClick={() => setActiveTab("about")} className={`px-2.5 py-1.5 rounded-full border transition-colors ${activeTab === 'about' ? (isLightMode ? 'bg-violet-100 border-violet-300 text-violet-700' : 'bg-white/10 border-white/20 text-white') : (isLightMode ? 'border-violet-200 hover:bg-violet-50' : 'border-white/10 hover:bg-white/10')}`}>About</button>
-              </div>
-              <button 
-                onClick={newChat} 
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm rounded-full transition-colors border whitespace-nowrap ${isLightMode ? "bg-violet-100 text-violet-700 hover:bg-violet-200 border-violet-300/80" : "bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 border-indigo-500/20"}`}
-              >
-                <MessageSquare size={14} /> <span className="hidden-xs">New Chat</span>
+              <span className="inline-flex items-center gap-1.5">
+                {speechOn ? <Volume2 size={14} /> : <VolumeX size={14} />}
+                <span className="hidden-xs">Voice {speechOn ? "On" : "Off"}</span>
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsLightMode((prev) => !prev)}
+              className={`px-2.5 sm:px-3 py-2 rounded-full border text-xs sm:text-sm transition ${isLightMode ? "border-amber-300/70 text-amber-600 bg-amber-200/40" : "border-indigo-300/30 text-indigo-200 bg-indigo-500/10 hover:bg-indigo-500/20"}`}
+            >
+              <span className="inline-flex items-center gap-1.5">
+                {isLightMode ? <Moon size={14} /> : <Sun size={14} />}
+                <span className="hidden-xs">{isLightMode ? "Dark" : "Light"}</span>
+              </span>
+            </button>
+            {wsState === "idle" && (
+              <button onClick={() => connectWs()} className="hidden sm:inline text-sm px-4 py-1.5 rounded-full border border-white/20 hover:bg-white/10 transition">
+                Reconnect
               </button>
-            </nav>
+            )}
+            <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 rounded-full border border-white/10 hover:bg-white/10 transition text-slate-300">
+              <Activity size={18} />
+            </button>
 
-            {activeTab === 'home' && (
+            <div className="w-[1px] h-6 bg-white/10 mx-1"></div>
 
-              <>
-                {/* Chat History */}
-                <div className="flex-1 overflow-y-auto w-full max-w-5xl mx-auto px-3 sm:px-6 md:px-8 pt-4 sm:pt-6 pb-6 flex flex-col gap-6 scroll-smooth">
-                    {timeline.length === 0 ? (
-                        <motion.div 
-                            initial={{ opacity: 0, y: 20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            className="flex flex-col items-center justify-center h-full text-center mt-10 sm:mt-16"
-                        >
-                            <div className="w-20 h-20 mb-6 rounded-full flex items-center justify-center">
-                                <img src="/favicon.png" alt="Synapse AI Logo" className="w-full h-full rounded-2xl object-cover object-center shadow-[0_0_30px_rgba(168,85,247,0.3)] border border-white/20 bg-white/5" />
-                            </div>
-                            <h2 className="text-xl sm:text-2xl md:text-3xl font-medium mb-3">Welcome to Synapse AI</h2>
-                            <p className={`text-sm sm:text-base max-w-xl px-4 ${isLightMode ? "theme-muted" : "text-slate-400"}`}>Hi there. Session is ready in the background. Ask anything, share your screen when needed, and I will help you step by step.</p>
-                        </motion.div>
-                    ) : (
-                        timeline.map((item, idx) => (
-                            <motion.div 
-                                initial={{ opacity: 0, y: 10 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                key={idx} 
-                                className={`flex gap-4 ${item.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                            >
-                                {item.role !== 'user' && (
-                                    <div className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center mt-1 overflow-hidden shadow-lg border border-white/10">
-                                        {item.role === 'system' ? <Code size={14} className="text-white" /> : <img src="/favicon.png" alt="AI" className="w-full h-full object-cover" />}
-                                    </div>
-                                )}
-                                
-                                <div className={`max-w-[80%] break-words whitespace-pre-wrap ${item.role === 'user' ? (isLightMode ? 'bg-violet-100 border border-violet-200 text-slate-800 rounded-3xl rounded-tr-sm px-5 py-3.5' : 'bg-[#282A2C] rounded-3xl rounded-tr-sm px-5 py-3.5') : item.role === 'system' ? (isLightMode ? 'bg-blue-100 border border-blue-200 text-blue-900 rounded-2xl px-4 py-2 text-sm' : 'bg-indigo-900/30 border border-indigo-500/20 text-indigo-200 rounded-2xl px-4 py-2 text-sm') : `${isLightMode ? 'text-slate-700' : 'text-slate-200'} text-lg leading-relaxed pt-1`}`}>
-                                    {item.text}
-                                </div>
-                            </motion.div>
-                        ))
-                    )}
-                    {isThinking && (
-                        <motion.div 
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            className="flex gap-4 justify-start"
-                        >
-                            <div className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center mt-1 overflow-hidden shadow-[0_0_15px_rgba(168,85,247,0.4)] border border-white/10">
-                                <img src="/favicon.png" alt="AI" className="w-full h-full object-cover" />
-                            </div>
-                            
-                            <div className="bg-transparent px-2 py-3.5 flex items-center gap-1.5 h-[48px]">
-                                <motion.div animate={{ opacity: [0.3, 1, 0.3], scale: [0.8, 1.2, 0.8] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0 }} className="w-2 h-2 rounded-full bg-indigo-400 shadow-[0_0_8px_rgba(129,140,248,0.6)]" />
-                                <motion.div animate={{ opacity: [0.3, 1, 0.3], scale: [0.8, 1.2, 0.8] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0.2 }} className="w-2 h-2 rounded-full bg-fuchsia-400 shadow-[0_0_8px_rgba(232,121,249,0.6)]" />
-                                <motion.div animate={{ opacity: [0.3, 1, 0.3], scale: [0.8, 1.2, 0.8] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0.4 }} className="w-2 h-2 rounded-full bg-indigo-400 shadow-[0_0_8px_rgba(129,140,248,0.6)]" />
-                            </div>
-                        </motion.div>
-                    )}
-                    <div ref={chatEndRef} />
-                </div>
-
-                {/* Input Area */}
-                <div className="sticky bottom-0 left-0 w-full px-3 sm:px-6 pb-[max(10px,env(safe-area-inset-bottom))] pt-4 bg-gradient-to-t from-[#0b0c10] via-[#0b0c10]/85 to-transparent z-10">
-                    <div className="max-w-4xl mx-auto relative">
-                        {/* Glowing shadow base */}
-                        <div className="absolute -inset-1 bg-gradient-to-r from-indigo-500/10 via-fuchsia-500/10 to-indigo-500/10 rounded-[32px] blur-xl opacity-50 transition-all duration-500 group-focus-within:opacity-100 group-focus-within:blur-2xl"></div>
-                        
-                        <div className="bg-[#1A1A1C]/80 backdrop-blur-xl rounded-[32px] p-2 flex flex-col shadow-2xl border border-white/5 transition-all focus-within:border-white/20 focus-within:bg-[#1E1F22]/90 relative z-10 group">
-                            <textarea
-                                disabled={wsState !== 'open'}
-                                value={input}
-                                onChange={(e) => setInput(e.target.value)}
-                                onKeyDown={(e) => {
-                                    if (e.key === "Enter" && !e.shiftKey) {
-                                      e.preventDefault();
-                                      sendText();
-                                    }
-                                }}
-                                rows={1}
-                                placeholder={wsState === 'open' ? "Ask about what's on your screen..." : wsState === "connecting" ? "Starting session..." : "Retry session to continue..."}
-                                className="w-full bg-transparent px-4 sm:px-6 py-3 sm:py-4 outline-none text-[14px] sm:text-[15px] placeholder:text-[#6E6E73] text-white disabled:opacity-50 resize-none overflow-hidden max-h-[150px]"
-                                style={{ minHeight: '60px' }}
-                            />
-                            
-                            <div className="flex items-center justify-between px-2 sm:px-3 pb-2 pt-1 border-t border-white/5 mt-1 gap-2">
-                                <div className="flex items-center gap-1">
-                                    <button className="p-2 rounded-full text-[#6E6E73] hover:bg-white/10 hover:text-white transition-colors" title="Attach file (mock)">
-                                        <Paperclip size={18} />
-                                    </button>
-                                    
-                                    {/* Mic Toggle */}
-                                    <button 
-                                        onClick={micOn ? stopMic : startMic} 
-                                        disabled={wsState !== "open" || !supportsMicCapture}
-                                        className={`p-2 rounded-full transition-all relative ${micOn ? 'text-rose-400 bg-rose-400/15' : 'text-[#6E6E73] hover:bg-white/10 hover:text-white disabled:opacity-50'}`}
-                                        title={!supportsMicCapture ? "Microphone is unavailable in this browser" : micOn ? "Mute Microphone" : "Unmute Microphone"}
-                                    >
-                                        <Mic size={18} />
-                                        {micOn && (
-                                            <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-rose-500 rounded-full animate-pulse border-2 border-[#1E1F22]"></span>
-                                        )}
-                                    </button>
-
-                                    {/* Screen Share Toggle */}
-                                    <button 
-                                        onClick={screenOn ? stopScreen : startScreen} 
-                                        disabled={wsState !== "open" || !supportsScreenCapture || isMobileDevice}
-                                        className={`p-2 rounded-full transition-all ${screenOn ? 'text-indigo-400 bg-indigo-400/15' : 'text-[#6E6E73] hover:bg-white/10 hover:text-white disabled:opacity-50'}`}
-                                        title={
-                                          !supportsScreenCapture
-                                            ? "Screen share is unavailable in this browser"
-                                            : isMobileDevice
-                                              ? "Screen share is desktop-only in most phone browsers"
-                                              : screenOn
-                                                ? "Stop Screen Share"
-                                                : "Start Screen Share"
-                                        }
-                                    >
-                                        <MonitorUp size={18} />
-                                    </button>
-                                    
-                                    <div className="h-5 w-[1px] bg-white/10 mx-1"></div>
-
-                                    {/* Interrupt Base */}
-                                    <button 
-                                        onClick={interrupt} 
-                                        disabled={wsState !== "open"}
-                                        className="p-2 rounded-full text-[#6E6E73] hover:text-amber-400 hover:bg-amber-400/10 transition-colors disabled:opacity-50"
-                                        title="Interrupt Agent"
-                                    >
-                                        <StopCircle size={18} />
-                                    </button>
-                                </div>
-
-                                <div className="flex items-center gap-2">
-                                    {sessionId && (
-                                         <button 
-                                            onClick={endSession} 
-                                            className="px-3 sm:px-4 py-2 rounded-full text-[11px] sm:text-xs font-semibold text-rose-400 bg-transparent hover:bg-rose-500/10 transition-colors border border-rose-500/20"
-                                        >
-                                            End Session
-                                        </button>
-                                    )}
-                                    
-                                    <button 
-                                        onClick={sendText} 
-                                        disabled={wsState !== "open" || !input.trim()}
-                                        className={`w-10 h-10 flex items-center justify-center rounded-full transition-all ${input.trim() && wsState === 'open' ? 'bg-gradient-to-r from-indigo-500 to-fuchsia-500 text-white shadow-[0_0_15px_rgba(99,102,241,0.4)] hover:scale-105' : 'bg-white/5 text-[#6E6E73]'}`}
-                                    >
-                                        <Send size={16} className="translate-x-[1px] translate-y-[-1px]" />
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-              </>
+            {deferredPrompt && (
+              <button onClick={async () => {
+                deferredPrompt.prompt();
+                const outcome = await deferredPrompt.userChoice;
+                if (outcome.outcome === 'accepted') {
+                  setDeferredPrompt(null);
+                }
+              }} className="px-3 py-1.5 rounded-full bg-fuchsia-500/20 text-fuchsia-300 hover:bg-fuchsia-500/30 transition-colors border border-fuchsia-500/20 text-xs sm:text-sm font-semibold flex items-center gap-1">
+                Install
+              </button>
             )}
 
-            {activeTab === 'history' && (
-                <div className={`flex-1 overflow-y-auto w-full max-w-5xl mx-auto px-4 sm:px-6 md:px-8 py-8 sm:py-12 flex flex-col gap-6 ${isLightMode ? "text-slate-700" : "text-slate-200"}`}>
-                    <h2 className="text-3xl font-bold gemini-gradient">Past Conversations</h2>
-                    {savedSessions.length === 0 ? (
-                        <div className={`text-center py-12 rounded-2xl border ${isLightMode ? "text-slate-600 bg-white/75 border-violet-200/80" : "text-slate-500 bg-[#1E1F20]/50 border-white/5"}`}>
-                            <MessageSquare size={48} className="mx-auto mb-4 opacity-50" />
-                            <p>No past conversations found.</p>
-                        </div>
-                    ) : (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-2">
-                            {savedSessions.map((s) => (
-                                <div 
-                                    key={s.id}
-                                    onClick={() => loadSession(s)}
-                                    className={`p-5 rounded-2xl border transition-all cursor-pointer flex flex-col gap-3 group relative ${isLightMode ? "bg-white/80 border-violet-200/70 hover:border-violet-400/60 hover:bg-white" : "bg-[#1E1F20]/80 border-white/5 hover:border-indigo-500/40 hover:bg-[#1E1F20]"}`}
-                                >
-                                    <div className="flex items-start justify-between">
-                                        <div className="w-8 h-8 rounded-full bg-indigo-500/20 flex items-center justify-center shrink-0">
-                                            <MessageSquare size={14} className="text-indigo-400" />
-                                        </div>
-                                        <button 
-                                            onClick={(e) => deleteSession(e, s.id)} 
-                                            className="p-1.5 rounded-full hover:bg-rose-500/20 text-slate-500 hover:text-rose-400 transition-colors opacity-0 group-hover:opacity-100"
-                                            title="Delete Chat"
-                                        >
-                                            <Trash2 size={14} />
-                                        </button>
-                                    </div>
-                                    <div className="flex-1">
-                                        <h3 className={`text-sm font-semibold line-clamp-2 leading-tight ${isLightMode ? "text-slate-800" : "text-slate-200"}`}>"{s.preview}"</h3>
-                                        <p className="text-xs text-slate-500 mt-2">{new Date(s.date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</p>
-                                    </div>
-                                    <div className="absolute top-0 right-0 w-2 h-2 rounded-full bg-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity -mt-1 -mr-1 blur-[2px]"></div>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-               </div>
+            {authLoading ? (
+              <div className="w-6 h-6 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin ml-1"></div>
+            ) : user ? (
+              <div className="flex items-center gap-2">
+                {user.photoURL && <img src={user.photoURL} alt="Avatar" className="w-7 h-7 rounded-full ml-1" />}
+                <button onClick={() => signOut(auth)} className="hidden sm:flex p-2 flex-shrink-0 rounded-full hover:bg-rose-500/20 text-rose-400 transition" title="Sign Out">
+                  <LogOut size={16} />
+                </button>
+              </div>
+            ) : (
+              <button onClick={async () => {
+                try {
+                  await signInWithPopup(auth, new GoogleAuthProvider());
+                } catch (error) {
+                  console.error("Sign in failed:", error);
+                }
+              }} className="px-3 py-1.5 rounded-full bg-white text-black text-xs sm:text-sm font-bold hover:bg-slate-200 transition whitespace-nowrap">
+                Sign In
+              </button>
             )}
+          </div>
+        </header>
+        <nav className="px-2 sm:px-6 lg:px-8 py-2 border-b border-white/5 bg-[#0f1016]/70 backdrop-blur-md flex items-center justify-between gap-1">
+          <div className={`flex items-center gap-1.5 overflow-x-auto whitespace-nowrap text-xs sm:text-sm scrollbar-none no-scrollbar py-0.5 ${isLightMode ? "text-slate-700" : "text-slate-300"}`}>
+            <button onClick={() => setActiveTab("home")} className={`px-2.5 py-1.5 rounded-full border transition-colors ${activeTab === 'home' ? (isLightMode ? 'bg-violet-100 border-violet-300 text-violet-700' : 'bg-white/10 border-white/20 text-white') : (isLightMode ? 'border-violet-200 hover:bg-violet-50' : 'border-white/10 hover:bg-white/10')}`}>Home</button>
+            <button onClick={() => setActiveTab("history")} className={`px-2.5 py-1.5 rounded-full border transition-colors ${activeTab === 'history' ? (isLightMode ? 'bg-violet-100 border-violet-300 text-violet-700' : 'bg-white/10 border-white/20 text-white') : (isLightMode ? 'border-violet-200 hover:bg-violet-50' : 'border-white/10 hover:bg-white/10')}`}>History</button>
+            <button onClick={() => setActiveTab("features")} className={`px-2.5 py-1.5 rounded-full border transition-colors ${activeTab === 'features' ? (isLightMode ? 'bg-violet-100 border-violet-300 text-violet-700' : 'bg-white/10 border-white/20 text-white') : (isLightMode ? 'border-violet-200 hover:bg-violet-50' : 'border-white/10 hover:bg-white/10')}`}>Features</button>
+            <button onClick={() => setActiveTab("about")} className={`px-2.5 py-1.5 rounded-full border transition-colors ${activeTab === 'about' ? (isLightMode ? 'bg-violet-100 border-violet-300 text-violet-700' : 'bg-white/10 border-white/20 text-white') : (isLightMode ? 'border-violet-200 hover:bg-violet-50' : 'border-white/10 hover:bg-white/10')}`}>About</button>
+          </div>
+          <button
+            onClick={newChat}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm rounded-full transition-colors border whitespace-nowrap ${isLightMode ? "bg-violet-100 text-violet-700 hover:bg-violet-200 border-violet-300/80" : "bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 border-indigo-500/20"}`}
+          >
+            <MessageSquare size={14} /> <span className="hidden-xs">New Chat</span>
+          </button>
+        </nav>
 
-            {activeTab === 'features' && (
-               <div className={`flex-1 overflow-y-auto w-full max-w-5xl mx-auto px-4 sm:px-6 md:px-8 py-8 sm:py-12 flex flex-col gap-6 ${isLightMode ? "text-slate-700" : "text-slate-200"}`}>
-                    <h2 className="text-3xl font-bold gemini-gradient">Features</h2>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mt-4">
-                        <div className={`p-6 rounded-2xl border transition-colors ${isLightMode ? "bg-white/85 border-violet-200/70 hover:border-violet-400/70" : "bg-[#1E1F20]/80 border-white/5 hover:border-indigo-500/30"}`}>
-                            <h3 className="text-xl font-semibold mb-2 text-indigo-300 flex items-center gap-2"><Sparkles size={20}/> Live Agent Interactions</h3>
-                            <p className={isLightMode ? "text-slate-600" : "text-slate-400"}>Interact in real-time with an AI agent equipped with voice synthesis and action planning. Get your answers instantly.</p>
-                        </div>
-                        <div className={`p-6 rounded-2xl border transition-colors ${isLightMode ? "bg-white/85 border-violet-200/70 hover:border-fuchsia-400/70" : "bg-[#1E1F20]/80 border-white/5 hover:border-fuchsia-500/30"}`}>
-                            <h3 className="text-xl font-semibold mb-2 text-fuchsia-300 flex items-center gap-2"><MonitorUp size={20}/> Screen & Audio Vision</h3>
-                            <p className={isLightMode ? "text-slate-600" : "text-slate-400"}>Share your desktop screen and microphone. The agent perceives the screen perfectly to assist you interactively.</p>
-                        </div>
-                        <div className={`p-6 rounded-2xl border transition-colors ${isLightMode ? "bg-white/85 border-violet-200/70 hover:border-emerald-400/70" : "bg-[#1E1F20]/80 border-white/5 hover:border-emerald-500/30"}`}>
-                            <h3 className="text-xl font-semibold mb-2 text-emerald-300 flex items-center gap-2"><StopCircle size={20}/> Interruptible Voice</h3>
-                            <p className={isLightMode ? "text-slate-600" : "text-slate-400"}>Halt the agent at any point during tasks, redirect its attention, and get better results on the fly.</p>
-                        </div>
-                        <div className={`p-6 rounded-2xl border transition-colors ${isLightMode ? "bg-white/85 border-violet-200/70 hover:border-amber-400/70" : "bg-[#1E1F20]/80 border-white/5 hover:border-amber-500/30"}`}>
-                            <h3 className="text-xl font-semibold mb-2 text-amber-300 flex items-center gap-2"><FileText size={20}/> Action Plan Display</h3>
-                            <p className={isLightMode ? "text-slate-600" : "text-slate-400"}>View what the agent is thinking, planning, and executing behind the scenes inside the sidebar panel.</p>
-                        </div>
-                    </div>
-               </div>
-            )}
+        {activeTab === 'home' && (
 
-            {activeTab === 'about' && (
-               <div className={`flex-1 overflow-y-auto w-full max-w-4xl mx-auto px-4 sm:px-6 md:px-8 py-8 sm:py-12 flex flex-col gap-6 ${isLightMode ? "text-slate-700" : "text-slate-200"}`}>
-                    <div className={`p-6 sm:p-8 rounded-2xl border shadow-xl mb-6 ${isLightMode ? "bg-white/85 border-violet-200/70" : "bg-[#1E1F20]/80 border-white/5"}`}>
-                        <h2 className="text-2xl font-bold gemini-gradient mb-4 flex items-center gap-2"><Sparkles size={24}/> About Synapse AI</h2>
-                        <p className={`text-lg leading-relaxed max-w-3xl ${isLightMode ? "text-slate-700" : "text-slate-300"}`}>
-                            Synapse AI is a next-generation intelligent copilot powered by the advanced capabilities of Gemini 2.0 Flash Live and OpenRouter. Designed for speed, precision, and multimodal understanding, it can see what's on your screen, hear your voice in real-time, and execute complex action plans seamlessly. Synapse acts as your dedicated digital partner to accelerate your workflows and answer complex queries instantly.
-                        </p>
-                    </div>
-
-                    <div className={`p-6 sm:p-8 rounded-2xl border shadow-xl ${isLightMode ? "bg-white/85 border-violet-200/70" : "bg-[#1E1F20]/80 border-white/5"}`}>
-                        <h2 className="text-2xl font-bold text-fuchsia-300 mb-4 flex items-center gap-2"><Code size={24}/> The Developer</h2>
-                        <p className={`text-lg leading-relaxed mb-6 ${isLightMode ? "text-slate-700" : "text-slate-300"}`}>
-                            Aryan Raikwar (also known as <strong>Aryan Zone</strong> or <strong>aaryaninvincible</strong>) is an innovative IoT & Full Stack Developer, AI Engineer, and a Tech Content Creator. Passionate about innovation and focusing on solving real-world challenges with cutting-edge technology.
-                        </p>
-                        <h4 className="text-lg font-semibold text-indigo-300 mb-3 flex items-center gap-2"><Activity size={18}/> Professional Background</h4>
-                        <ul className={`list-disc leading-relaxed ml-5 mb-6 ${isLightMode ? "text-slate-600" : "text-slate-400"}`}>
-                            <li><strong>IoT Development:</strong> Built scalable IoT solutions at Krishi Verse (Ouranos Robotics).</li>
-                            <li><strong>Full-Stack Development:</strong> Created efficient and scalable web applications at Inocrypt Infosoft.</li>
-                            <li><strong>Tech Content Creator:</strong> Over 13K+ followers on Instagram (@codesworld.exe / aaryaninvincible) with 2M+ views and 100M+ reach.</li>
-                        </ul>
-                        
-                        <h4 className="text-lg font-semibold text-fuchsia-300 mb-3 flex items-center gap-2"><Code size={18}/> Skills & Technologies</h4>
-                        <p className={`mb-6 leading-relaxed p-4 rounded-xl border ${isLightMode ? "text-slate-600 bg-violet-50 border-violet-200/70" : "text-slate-400 bg-[#1A1A1C] border-white/5"}`}>
-                            JavaScript, Python, PHP, React.js, Node.js, Flask, AI/ML, NLP, SQL, MongoDB, IoT, AWS, Shopify.
-                        </p>
-
-                        <h4 className="text-lg font-semibold text-emerald-300 mb-3 flex items-center gap-2"><Sparkles size={18}/> Key Projects</h4>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-8">
-                            <div className={`p-3 rounded-xl border text-sm ${isLightMode ? "bg-violet-50 border-violet-200/70 text-slate-600" : "bg-[#1A1A1C] border-white/5 text-slate-400"}`}>Voltros.in E-commerce Platform</div>
-                            <div className={`p-3 rounded-xl border text-sm ${isLightMode ? "bg-violet-50 border-violet-200/70 text-slate-600" : "bg-[#1A1A1C] border-white/5 text-slate-400"}`}>Smart Agriculture Device (IoT)</div>
-                            <div className={`p-3 rounded-xl border text-sm ${isLightMode ? "bg-violet-50 border-violet-200/70 text-slate-600" : "bg-[#1A1A1C] border-white/5 text-slate-400"}`}>AI Career Counseling Platform</div>
-                            <div className={`p-3 rounded-xl border text-sm ${isLightMode ? "bg-violet-50 border-violet-200/70 text-slate-600" : "bg-[#1A1A1C] border-white/5 text-slate-400"}`}>Open-Source Python POS System</div>
-                            <div className={`p-3 rounded-xl border text-sm ${isLightMode ? "bg-violet-50 border-violet-200/70 text-slate-600" : "bg-[#1A1A1C] border-white/5 text-slate-400"}`}>React IoT Dashboard</div>
-                            <div className={`p-3 rounded-xl border text-sm ${isLightMode ? "bg-violet-50 border-violet-200/70 text-slate-600" : "bg-[#1A1A1C] border-white/5 text-slate-400"}`}>2D Games: Flappy Neon, Dino Dash etc.</div>
-                        </div>
-
-                        <div className="pt-6 border-t border-white/10 flex flex-wrap gap-4 items-center justify-between">
-                            <p className="text-sm text-slate-400">Let's connect!</p>
-                            <div className="flex items-center gap-3">
-                                <a href="https://portfolio-eta-lake-19.vercel.app/" target="_blank" rel="noreferrer" className="px-5 py-2.5 bg-indigo-500/20 text-indigo-300 rounded-full hover:bg-indigo-500/30 transition-colors text-sm font-semibold tracking-wide border border-indigo-500/20">Full Portfolio</a>
-                                <a href="https://instagram.com/aaryaninvincible" target="_blank" rel="noreferrer" className="px-5 py-2.5 bg-fuchsia-500/20 text-fuchsia-300 rounded-full hover:bg-fuchsia-500/30 transition-colors text-sm font-semibold tracking-wide border border-fuchsia-500/20">Instagram</a>
-                            </div>
-                        </div>
-                    </div>
-               </div>
-            )}
-        </main>
-
-        {/* Right Sidebar - Action Plan & Activity */}
-        <AnimatePresence>
-            {isSidebarOpen && (
-                <motion.button
-                    key="sidebar-overlay"
-                    type="button"
-                    aria-label="Close analysis panel"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    onClick={() => setIsSidebarOpen(false)}
-                    className="absolute inset-0 z-20 bg-black/40 md:hidden"
-                />
-            )}
-            {isSidebarOpen && (
-                <motion.aside 
-                    key="sidebar-content"
-                    initial={{ x: 400, opacity: 0 }}
-                    animate={{ x: 0, opacity: 1 }}
-                    exit={{ x: 400, opacity: 0 }}
-                    transition={{ type: "spring", damping: 25, stiffness: 200 }}
-                    className="w-full md:w-[380px] h-[100svh] bg-glass border-l border-white/5 flex flex-col z-30 shadow-2xl absolute right-0 top-0"
+          <>
+            {/* Chat History */}
+            <div className="flex-1 overflow-y-auto w-full max-w-5xl mx-auto px-3 sm:px-6 md:px-8 pt-4 sm:pt-6 pb-6 flex flex-col gap-6 scroll-smooth">
+              {timeline.length === 0 ? (
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="flex flex-col items-center justify-center h-full text-center mt-10 sm:mt-16"
                 >
-                    <div className="p-5 flex items-center justify-between border-b border-white/5 sticky top-0 bg-[#121319]/95 backdrop-blur-md">
-                        <div className="flex items-center gap-2">
-                            <Activity size={18} className="text-indigo-400" />
-                            <h2 className="font-semibold tracking-wide text-sm">Live Analysis</h2>
-                        </div>
+                  <div className="w-20 h-20 mb-6 rounded-full flex items-center justify-center">
+                    <img src="/favicon.png" alt="Synapse AI Logo" className="w-full h-full rounded-2xl object-cover object-center shadow-[0_0_30px_rgba(168,85,247,0.3)] border border-white/20 bg-white/5" />
+                  </div>
+                  <h2 className="text-xl sm:text-2xl md:text-3xl font-medium mb-3">Welcome to Synapse AI</h2>
+                  <p className={`text-sm sm:text-base max-w-xl px-4 ${isLightMode ? "theme-muted" : "text-slate-400"}`}>Hi there. Session is ready in the background. Ask anything, share your screen when needed, and I will help you step by step.</p>
+                </motion.div>
+              ) : (
+                timeline.map((item, idx) => (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    key={idx}
+                    className={`flex gap-4 ${item.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                  >
+                    {item.role !== 'user' && (
+                      <div className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center mt-1 overflow-hidden shadow-lg border border-white/10">
+                        {item.role === 'system' ? <Code size={14} className="text-white" /> : <img src="/favicon.png" alt="AI" className="w-full h-full object-cover" />}
+                      </div>
+                    )}
+
+                    <div className={`max-w-[80%] break-words whitespace-pre-wrap ${item.role === 'user' ? (isLightMode ? 'bg-violet-100 border border-violet-200 text-slate-800 rounded-3xl rounded-tr-sm px-5 py-3.5' : 'bg-[#282A2C] rounded-3xl rounded-tr-sm px-5 py-3.5') : item.role === 'system' ? (isLightMode ? 'bg-blue-100 border border-blue-200 text-blue-900 rounded-2xl px-4 py-2 text-sm' : 'bg-indigo-900/30 border border-indigo-500/20 text-indigo-200 rounded-2xl px-4 py-2 text-sm') : `${isLightMode ? 'text-slate-700' : 'text-slate-200'} text-lg leading-relaxed pt-1`}`}>
+                      {item.text}
+                    </div>
+                  </motion.div>
+                ))
+              )}
+              {isThinking && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="flex gap-4 justify-start"
+                >
+                  <div className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center mt-1 overflow-hidden shadow-[0_0_15px_rgba(168,85,247,0.4)] border border-white/10">
+                    <img src="/favicon.png" alt="AI" className="w-full h-full object-cover" />
+                  </div>
+
+                  <div className="bg-transparent px-2 py-3.5 flex items-center gap-1.5 h-[48px]">
+                    <motion.div animate={{ opacity: [0.3, 1, 0.3], scale: [0.8, 1.2, 0.8] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0 }} className="w-2 h-2 rounded-full bg-indigo-400 shadow-[0_0_8px_rgba(129,140,248,0.6)]" />
+                    <motion.div animate={{ opacity: [0.3, 1, 0.3], scale: [0.8, 1.2, 0.8] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0.2 }} className="w-2 h-2 rounded-full bg-fuchsia-400 shadow-[0_0_8px_rgba(232,121,249,0.6)]" />
+                    <motion.div animate={{ opacity: [0.3, 1, 0.3], scale: [0.8, 1.2, 0.8] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0.4 }} className="w-2 h-2 rounded-full bg-indigo-400 shadow-[0_0_8px_rgba(129,140,248,0.6)]" />
+                  </div>
+                </motion.div>
+              )}
+              <div ref={chatEndRef} />
+            </div>
+
+            {/* Input Area */}
+            <div className="sticky bottom-0 left-0 w-full px-3 sm:px-6 pb-[max(10px,env(safe-area-inset-bottom))] pt-4 bg-gradient-to-t from-[#0b0c10] via-[#0b0c10]/85 to-transparent z-10">
+              <div className="max-w-4xl mx-auto relative">
+                {/* Glowing shadow base */}
+                <div className="absolute -inset-1 bg-gradient-to-r from-indigo-500/10 via-fuchsia-500/10 to-indigo-500/10 rounded-[32px] blur-xl opacity-50 transition-all duration-500 group-focus-within:opacity-100 group-focus-within:blur-2xl"></div>
+
+                <div className="bg-[#1A1A1C]/80 backdrop-blur-xl rounded-[32px] p-2 flex flex-col shadow-2xl border border-white/5 transition-all focus-within:border-white/20 focus-within:bg-[#1E1F22]/90 relative z-10 group">
+                  <textarea
+                    disabled={wsState !== 'open'}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        sendText();
+                      }
+                    }}
+                    rows={1}
+                    placeholder={wsState === 'open' ? "Ask about what's on your screen..." : wsState === "connecting" ? "Starting session..." : "Retry session to continue..."}
+                    className="w-full bg-transparent px-4 sm:px-6 py-3 sm:py-4 outline-none text-[14px] sm:text-[15px] placeholder:text-[#6E6E73] text-white disabled:opacity-50 resize-none overflow-hidden max-h-[150px]"
+                    style={{ minHeight: '60px' }}
+                  />
+
+                  <div className="flex items-center justify-between px-2 sm:px-3 pb-2 pt-1 border-t border-white/5 mt-1 gap-2">
+                    <div className="flex items-center gap-1">
+                      <button className="p-2 rounded-full text-[#6E6E73] hover:bg-white/10 hover:text-white transition-colors" title="Attach file (mock)">
+                        <Paperclip size={18} />
+                      </button>
+
+                      {/* Mic Toggle */}
+                      <button
+                        onClick={micOn ? stopMic : startMic}
+                        disabled={wsState !== "open" || !supportsMicCapture}
+                        className={`p-2 rounded-full transition-all relative ${micOn ? 'text-rose-400 bg-rose-400/15' : 'text-[#6E6E73] hover:bg-white/10 hover:text-white disabled:opacity-50'}`}
+                        title={!supportsMicCapture ? "Microphone is unavailable in this browser" : micOn ? "Mute Microphone" : "Unmute Microphone"}
+                      >
+                        <Mic size={18} />
+                        {micOn && (
+                          <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-rose-500 rounded-full animate-pulse border-2 border-[#1E1F22]"></span>
+                        )}
+                      </button>
+
+                      <button
+                        onClick={voiceTypingOn ? stopVoiceTyping : startVoiceTyping}
+                        disabled={wsState !== "open" || !supportsVoiceTyping}
+                        className={`p-2 rounded-full transition-all ${voiceTypingOn ? "text-emerald-300 bg-emerald-500/15" : "text-[#6E6E73] hover:bg-white/10 hover:text-white disabled:opacity-50"}`}
+                        title={!supportsVoiceTyping ? "Voice typing is unavailable in this browser" : voiceTypingOn ? "Stop Voice Typing" : "Start Voice Typing"}
+                      >
+                        <MessageSquare size={18} />
+                      </button>
+
+                      {/* Screen Share Toggle */}
+                      <button
+                        onClick={screenOn ? stopScreen : startScreen}
+                        disabled={wsState !== "open" || (!supportsScreenCapture && !supportsCameraCapture)}
+                        className={`p-2 rounded-full transition-all ${screenOn ? 'text-indigo-400 bg-indigo-400/15' : 'text-[#6E6E73] hover:bg-white/10 hover:text-white disabled:opacity-50'}`}
+                        title={
+                          !supportsScreenCapture && !supportsCameraCapture
+                            ? "Visual capture is unavailable in this browser"
+                            : isMobileDevice
+                              ? (screenOn ? "Stop Camera Share" : "Start Camera Share")
+                              : screenOn
+                                ? "Stop Screen Share"
+                                : "Start Screen Share"
+                        }
+                      >
+                        <MonitorUp size={18} />
+                      </button>
+
+                      <div className="h-5 w-[1px] bg-white/10 mx-1"></div>
+
+                      {/* Interrupt Base */}
+                      <button
+                        onClick={interrupt}
+                        disabled={wsState !== "open"}
+                        className="p-2 rounded-full text-[#6E6E73] hover:text-amber-400 hover:bg-amber-400/10 transition-colors disabled:opacity-50"
+                        title="Interrupt Agent"
+                      >
+                        <StopCircle size={18} />
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {sessionId && (
                         <button
-                            type="button"
-                            aria-label="Collapse analysis panel"
-                            onClick={() => setIsSidebarOpen(false)}
-                            className="p-2 rounded-full hover:bg-white/10 text-slate-300"
+                          onClick={endSession}
+                          className="px-3 sm:px-4 py-2 rounded-full text-[11px] sm:text-xs font-semibold text-rose-400 bg-transparent hover:bg-rose-500/10 transition-colors border border-rose-500/20"
                         >
-                            <ChevronRight size={20} />
+                          End Session
                         </button>
+                      )}
+
+                      <button
+                        onClick={sendText}
+                        disabled={wsState !== "open" || !input.trim()}
+                        className={`w-10 h-10 flex items-center justify-center rounded-full transition-all ${input.trim() && wsState === 'open' ? 'bg-gradient-to-r from-indigo-500 to-fuchsia-500 text-white shadow-[0_0_15px_rgba(99,102,241,0.4)] hover:scale-105' : 'bg-white/5 text-[#6E6E73]'}`}
+                      >
+                        <Send size={16} className="translate-x-[1px] translate-y-[-1px]" />
+                      </button>
                     </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
 
-                    <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-6">
-                        {/* Status Widget */}
-                        <div className="bg-[#1E1F20] rounded-2xl p-4 border border-white/5">
-                            <h3 className="text-xs uppercase text-slate-500 tracking-wider mb-3 font-semibold">Connections</h3>
-                            <div className="space-y-3">
-                                <div className="flex items-center justify-between">
-                                    <span className="text-sm text-slate-300">WebSocket</span>
-                                    <div className="flex items-center gap-2">
-                                        <div className={`w-2 h-2 rounded-full ${wsState === 'open' ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]' : 'bg-red-400'}`}></div>
-                                        <span className="text-xs text-slate-400 capitalize">{wsState}</span>
-                                    </div>
-                                </div>
-                                <div className="flex items-center justify-between">
-                                    <span className="text-sm text-slate-300">Screen Vision</span>
-                                    <div className="flex items-center gap-2">
-                                         <div className={`w-2 h-2 rounded-full ${screenOn ? 'bg-indigo-400 shadow-[0_0_8px_#818cf8]' : 'bg-slate-600'}`}></div>
-                                         <span className="text-xs text-slate-400">{screenOn ? 'Active' : 'Idle'}</span>
-                                    </div>
-                                </div>
-                                <div className="flex items-center justify-between">
-                                    <span className="text-sm text-slate-300">Audio Stream</span>
-                                    <div className="flex items-center gap-2">
-                                         <div className={`w-2 h-2 rounded-full ${micOn ? 'bg-fuchsia-400 shadow-[0_0_8px_#e879f9]' : 'bg-slate-600'}`}></div>
-                                          <span className="text-xs text-slate-400">{micOn ? 'Active' : 'Idle'}</span>
-                                    </div>
-                                </div>
-                                <div className="flex items-center justify-between">
-                                    <span className="text-sm text-slate-300">Gemini</span>
-                                    <div className="flex items-center gap-2">
-                                         <div className={`w-2 h-2 rounded-full ${geminiStatus.backendUp && geminiStatus.mode === 'gemini' ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]' : geminiStatus.backendUp ? 'bg-amber-400 shadow-[0_0_8px_#f59e0b]' : 'bg-red-400'}`}></div>
-                                          <span className="text-xs text-slate-400">
-                                            {!geminiStatus.backendUp ? 'Backend Down' : geminiStatus.mode === 'gemini' ? 'Live' : 'Mock'}
-                                          </span>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* Action Plan */}
-                        <div>
-                            <div className="flex items-center justify-between mb-3 gap-2">
-                                <h3 className="text-xs uppercase text-slate-500 tracking-wider font-semibold flex items-center gap-2">
-                                    <FileText size={14} /> Agent Action Plan
-                                </h3>
-                                <div className="flex items-center gap-2">
-                                    <button
-                                      onClick={() => setActionRunnerOn((prev) => !prev)}
-                                      className={`text-[10px] px-2 py-1 rounded-full border transition ${actionRunnerOn ? "border-emerald-400/60 text-emerald-300 bg-emerald-500/10" : "border-white/15 text-slate-400 hover:text-slate-200"}`}
-                                      title="Auto execute new action plans"
-                                    >
-                                      {actionRunnerOn ? "Auto ON" : "Auto OFF"}
-                                    </button>
-                                    <button
-                                      onClick={() => void runActionPlan()}
-                                      disabled={actionSteps.length === 0 || executingStepIndex !== null}
-                                      className="text-[10px] px-2 py-1 rounded-full border border-indigo-400/50 text-indigo-300 bg-indigo-500/10 disabled:opacity-40"
-                                      title="Execute full action plan"
-                                    >
-                                      Run All
-                                    </button>
-                                    <button
-                                      onClick={runActionPlanRemote}
-                                      disabled={actionSteps.length === 0 || wsState !== "open"}
-                                      className="text-[10px] px-2 py-1 rounded-full border border-cyan-400/50 text-cyan-300 bg-cyan-500/10 disabled:opacity-40"
-                                      title="Run plan in backend-controlled browser (Lightpanda/CDP)"
-                                    >
-                                      Run Remote
-                                    </button>
-                                </div>
-                            </div>
-                            <input
-                              value={remoteStartUrl}
-                              onChange={(e) => setRemoteStartUrl(e.target.value)}
-                              placeholder="Remote start URL (e.g. https://app.example.com)"
-                              className="w-full mb-3 bg-[#17181a] border border-white/10 rounded-lg px-2.5 py-2 text-xs text-slate-200 placeholder:text-slate-500 outline-none"
-                            />
-                            {actionSteps.length === 0 ? (
-                                <div className="text-center p-6 border border-white/5 border-dashed rounded-2xl text-slate-500 text-sm">
-                                    Waiting for agent to propose actions based on screen context.
-                                </div>
-                            ) : (
-                                <div className="space-y-3">
-                                    {actionSteps.map((step, idx) => (
-                                        <motion.div 
-                                            initial={{ opacity: 0, x: 20 }}
-                                            animate={{ opacity: 1, x: 0 }}
-                                            key={idx} 
-                                            className="bg-[#1E1F20] rounded-xl p-3.5 border border-white/5 border-l-2 border-l-indigo-500"
-                                        >
-                                            <div className="flex items-center gap-2 mb-1">
-                                                <span className="text-[10px] bg-indigo-500/20 text-indigo-300 px-1.5 py-0.5 rounded font-mono">STEP {idx + 1}</span>
-                                                <span className="text-sm font-semibold text-slate-200 capitalize">{step.type || 'Action'}</span>
-                                            </div>
-                                            {step.target && <p className="text-xs text-slate-400 break-all"><span className="text-slate-500">Target:</span> {step.target}</p>}
-                                            {step.text && <p className="text-xs text-slate-400 mt-1"><span className="text-slate-500">Value:</span> {step.text}</p>}
-                                            <div className="mt-2">
-                                                <button
-                                                  onClick={() => void executeActionStep(step, idx)}
-                                                  disabled={executingStepIndex !== null}
-                                                  className="text-[10px] px-2 py-1 rounded-full border border-white/15 text-slate-300 hover:text-white hover:bg-white/10 disabled:opacity-40"
-                                                >
-                                                  {executingStepIndex === idx ? "Running..." : "Run Step"}
-                                                </button>
-                                            </div>
-                                        </motion.div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-
+        {activeTab === 'history' && (
+          <div className={`flex-1 overflow-y-auto w-full max-w-5xl mx-auto px-4 sm:px-6 md:px-8 py-8 sm:py-12 flex flex-col gap-6 ${isLightMode ? "text-slate-700" : "text-slate-200"}`}>
+            <h2 className="text-3xl font-bold gemini-gradient">Past Conversations</h2>
+            {savedSessions.length === 0 ? (
+              <div className={`text-center py-12 rounded-2xl border ${isLightMode ? "text-slate-600 bg-white/75 border-violet-200/80" : "text-slate-500 bg-[#1E1F20]/50 border-white/5"}`}>
+                <MessageSquare size={48} className="mx-auto mb-4 opacity-50" />
+                <p>No past conversations found.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-2">
+                {savedSessions.map((s) => (
+                  <div
+                    key={s.id}
+                    onClick={() => loadSession(s)}
+                    className={`p-5 rounded-2xl border transition-all cursor-pointer flex flex-col gap-3 group relative ${isLightMode ? "bg-white/80 border-violet-200/70 hover:border-violet-400/60 hover:bg-white" : "bg-[#1E1F20]/80 border-white/5 hover:border-indigo-500/40 hover:bg-[#1E1F20]"}`}
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="w-8 h-8 rounded-full bg-indigo-500/20 flex items-center justify-center shrink-0">
+                        <MessageSquare size={14} className="text-indigo-400" />
+                      </div>
+                      <button
+                        onClick={(e) => deleteSession(e, s.id)}
+                        className="p-1.5 rounded-full hover:bg-rose-500/20 text-slate-500 hover:text-rose-400 transition-colors opacity-0 group-hover:opacity-100"
+                        title="Delete Chat"
+                      >
+                        <Trash2 size={14} />
+                      </button>
                     </div>
-                </motion.aside>
+                    <div className="flex-1">
+                      <h3 className={`text-sm font-semibold line-clamp-2 leading-tight ${isLightMode ? "text-slate-800" : "text-slate-200"}`}>"{s.preview}"</h3>
+                      <p className="text-xs text-slate-500 mt-2">{new Date(s.date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</p>
+                    </div>
+                    <div className="absolute top-0 right-0 w-2 h-2 rounded-full bg-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity -mt-1 -mr-1 blur-[2px]"></div>
+                  </div>
+                ))}
+              </div>
             )}
-        </AnimatePresence>
+          </div>
+        )}
 
-        <footer className="hidden sm:block absolute bottom-2 left-6 z-30 text-[11px] text-slate-500">
-          Synapse AI | Developer - aryaninvincible
-        </footer>
+        {activeTab === 'features' && (
+          <div className={`flex-1 overflow-y-auto w-full max-w-5xl mx-auto px-4 sm:px-6 md:px-8 py-8 sm:py-12 flex flex-col gap-6 ${isLightMode ? "text-slate-700" : "text-slate-200"}`}>
+            <h2 className="text-3xl font-bold gemini-gradient">Features</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mt-4">
+              <div className={`p-6 rounded-2xl border transition-colors ${isLightMode ? "bg-white/85 border-violet-200/70 hover:border-violet-400/70" : "bg-[#1E1F20]/80 border-white/5 hover:border-indigo-500/30"}`}>
+                <h3 className="text-xl font-semibold mb-2 text-indigo-300 flex items-center gap-2"><Sparkles size={20} /> Live Agent Interactions</h3>
+                <p className={isLightMode ? "text-slate-600" : "text-slate-400"}>Interact in real-time with an AI agent equipped with voice synthesis and action planning. Get your answers instantly.</p>
+              </div>
+              <div className={`p-6 rounded-2xl border transition-colors ${isLightMode ? "bg-white/85 border-violet-200/70 hover:border-fuchsia-400/70" : "bg-[#1E1F20]/80 border-white/5 hover:border-fuchsia-500/30"}`}>
+                <h3 className="text-xl font-semibold mb-2 text-fuchsia-300 flex items-center gap-2"><MonitorUp size={20} /> Screen & Audio Vision</h3>
+                <p className={isLightMode ? "text-slate-600" : "text-slate-400"}>Share your desktop screen and microphone. The agent perceives the screen perfectly to assist you interactively.</p>
+              </div>
+              <div className={`p-6 rounded-2xl border transition-colors ${isLightMode ? "bg-white/85 border-violet-200/70 hover:border-emerald-400/70" : "bg-[#1E1F20]/80 border-white/5 hover:border-emerald-500/30"}`}>
+                <h3 className="text-xl font-semibold mb-2 text-emerald-300 flex items-center gap-2"><StopCircle size={20} /> Interruptible Voice</h3>
+                <p className={isLightMode ? "text-slate-600" : "text-slate-400"}>Halt the agent at any point during tasks, redirect its attention, and get better results on the fly.</p>
+              </div>
+              <div className={`p-6 rounded-2xl border transition-colors ${isLightMode ? "bg-white/85 border-violet-200/70 hover:border-amber-400/70" : "bg-[#1E1F20]/80 border-white/5 hover:border-amber-500/30"}`}>
+                <h3 className="text-xl font-semibold mb-2 text-amber-300 flex items-center gap-2"><FileText size={20} /> Action Plan Display</h3>
+                <p className={isLightMode ? "text-slate-600" : "text-slate-400"}>View what the agent is thinking, planning, and executing behind the scenes inside the sidebar panel.</p>
+              </div>
+            </div>
+          </div>
+        )}
 
-        <video ref={videoRef} style={{ display: "none" }} playsInline muted />
+        {activeTab === 'about' && (
+          <div className={`flex-1 overflow-y-auto w-full max-w-4xl mx-auto px-4 sm:px-6 md:px-8 py-8 sm:py-12 flex flex-col gap-6 ${isLightMode ? "text-slate-700" : "text-slate-200"}`}>
+            <div className={`p-6 sm:p-8 rounded-2xl border shadow-xl mb-6 ${isLightMode ? "bg-white/85 border-violet-200/70" : "bg-[#1E1F20]/80 border-white/5"}`}>
+              <h2 className="text-2xl font-bold gemini-gradient mb-4 flex items-center gap-2"><Sparkles size={24} /> About Synapse AI</h2>
+              <p className={`text-lg leading-relaxed max-w-3xl ${isLightMode ? "text-slate-700" : "text-slate-300"}`}>
+                Synapse AI is a next-generation intelligent copilot powered by the advanced capabilities of Gemini 2.0 Flash Live and OpenRouter. Designed for speed, precision, and multimodal understanding, it can see what's on your screen, hear your voice in real-time, and execute complex action plans seamlessly. Synapse acts as your dedicated digital partner to accelerate your workflows and answer complex queries instantly.
+              </p>
+            </div>
+
+            <div className={`p-6 sm:p-8 rounded-2xl border shadow-xl ${isLightMode ? "bg-white/85 border-violet-200/70" : "bg-[#1E1F20]/80 border-white/5"}`}>
+              <h2 className="text-2xl font-bold text-fuchsia-300 mb-4 flex items-center gap-2"><Code size={24} /> The Developer</h2>
+              <p className={`text-lg leading-relaxed mb-6 ${isLightMode ? "text-slate-700" : "text-slate-300"}`}>
+                Aryan Raikwar (also known as <strong>Aryan Zone</strong> or <strong>aaryaninvincible</strong>) is an innovative IoT & Full Stack Developer, AI Engineer, and a Tech Content Creator. Passionate about innovation and focusing on solving real-world challenges with cutting-edge technology.
+              </p>
+              <h4 className="text-lg font-semibold text-indigo-300 mb-3 flex items-center gap-2"><Activity size={18} /> Professional Background</h4>
+              <ul className={`list-disc leading-relaxed ml-5 mb-6 ${isLightMode ? "text-slate-600" : "text-slate-400"}`}>
+                <li><strong>IoT Development:</strong> Built scalable IoT solutions at Krishi Verse (Ouranos Robotics).</li>
+                <li><strong>Full-Stack Development:</strong> Created efficient and scalable web applications at Inocrypt Infosoft.</li>
+                <li><strong>Tech Content Creator:</strong> Over 13K+ followers on Instagram (@codesworld.exe / aaryaninvincible) with 2M+ views and 100M+ reach.</li>
+              </ul>
+
+              <h4 className="text-lg font-semibold text-fuchsia-300 mb-3 flex items-center gap-2"><Code size={18} /> Skills & Technologies</h4>
+              <p className={`mb-6 leading-relaxed p-4 rounded-xl border ${isLightMode ? "text-slate-600 bg-violet-50 border-violet-200/70" : "text-slate-400 bg-[#1A1A1C] border-white/5"}`}>
+                JavaScript, Python, PHP, React.js, Node.js, Flask, AI/ML, NLP, SQL, MongoDB, IoT, AWS, Shopify.
+              </p>
+
+              <h4 className="text-lg font-semibold text-emerald-300 mb-3 flex items-center gap-2"><Sparkles size={18} /> Key Projects</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-8">
+                <div className={`p-3 rounded-xl border text-sm ${isLightMode ? "bg-violet-50 border-violet-200/70 text-slate-600" : "bg-[#1A1A1C] border-white/5 text-slate-400"}`}>Voltros.in E-commerce Platform</div>
+                <div className={`p-3 rounded-xl border text-sm ${isLightMode ? "bg-violet-50 border-violet-200/70 text-slate-600" : "bg-[#1A1A1C] border-white/5 text-slate-400"}`}>Smart Agriculture Device (IoT)</div>
+                <div className={`p-3 rounded-xl border text-sm ${isLightMode ? "bg-violet-50 border-violet-200/70 text-slate-600" : "bg-[#1A1A1C] border-white/5 text-slate-400"}`}>AI Career Counseling Platform</div>
+                <div className={`p-3 rounded-xl border text-sm ${isLightMode ? "bg-violet-50 border-violet-200/70 text-slate-600" : "bg-[#1A1A1C] border-white/5 text-slate-400"}`}>Open-Source Python POS System</div>
+                <div className={`p-3 rounded-xl border text-sm ${isLightMode ? "bg-violet-50 border-violet-200/70 text-slate-600" : "bg-[#1A1A1C] border-white/5 text-slate-400"}`}>React IoT Dashboard</div>
+                <div className={`p-3 rounded-xl border text-sm ${isLightMode ? "bg-violet-50 border-violet-200/70 text-slate-600" : "bg-[#1A1A1C] border-white/5 text-slate-400"}`}>2D Games: Flappy Neon, Dino Dash etc.</div>
+              </div>
+
+              <div className="pt-6 border-t border-white/10 flex flex-wrap gap-4 items-center justify-between">
+                <p className="text-sm text-slate-400">Let's connect!</p>
+                <div className="flex items-center gap-3">
+                  <a href="https://portfolio-eta-lake-19.vercel.app/" target="_blank" rel="noreferrer" className="px-5 py-2.5 bg-indigo-500/20 text-indigo-300 rounded-full hover:bg-indigo-500/30 transition-colors text-sm font-semibold tracking-wide border border-indigo-500/20">Full Portfolio</a>
+                  <a href="https://instagram.com/aaryaninvincible" target="_blank" rel="noreferrer" className="px-5 py-2.5 bg-fuchsia-500/20 text-fuchsia-300 rounded-full hover:bg-fuchsia-500/30 transition-colors text-sm font-semibold tracking-wide border border-fuchsia-500/20">Instagram</a>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </main>
+
+      {/* Right Sidebar - Action Plan & Activity */}
+      <AnimatePresence>
+        {isSidebarOpen && (
+          <motion.button
+            key="sidebar-overlay"
+            type="button"
+            aria-label="Close analysis panel"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setIsSidebarOpen(false)}
+            className="absolute inset-0 z-20 bg-black/40 md:hidden"
+          />
+        )}
+        {isSidebarOpen && (
+          <motion.aside
+            key="sidebar-content"
+            initial={{ x: 400, opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={{ x: 400, opacity: 0 }}
+            transition={{ type: "spring", damping: 25, stiffness: 200 }}
+            className="w-full md:w-[380px] h-[100svh] bg-glass border-l border-white/5 flex flex-col z-30 shadow-2xl absolute right-0 top-0"
+          >
+            <div className="p-5 flex items-center justify-between border-b border-white/5 sticky top-0 bg-[#121319]/95 backdrop-blur-md">
+              <div className="flex items-center gap-2">
+                <Activity size={18} className="text-indigo-400" />
+                <h2 className="font-semibold tracking-wide text-sm">Live Analysis</h2>
+              </div>
+              <button
+                type="button"
+                aria-label="Collapse analysis panel"
+                onClick={() => setIsSidebarOpen(false)}
+                className="p-2 rounded-full hover:bg-white/10 text-slate-300"
+              >
+                <ChevronRight size={20} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-6">
+              {/* Status Widget */}
+              <div className="bg-[#1E1F20] rounded-2xl p-4 border border-white/5">
+                <h3 className="text-xs uppercase text-slate-500 tracking-wider mb-3 font-semibold">Connections</h3>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-slate-300">WebSocket</span>
+                    <div className="flex items-center gap-2">
+                      <div className={`w-2 h-2 rounded-full ${wsState === 'open' ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]' : 'bg-red-400'}`}></div>
+                      <span className="text-xs text-slate-400 capitalize">{wsState}</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-slate-300">Screen Vision</span>
+                    <div className="flex items-center gap-2">
+                      <div className={`w-2 h-2 rounded-full ${screenOn ? 'bg-indigo-400 shadow-[0_0_8px_#818cf8]' : 'bg-slate-600'}`}></div>
+                      <span className="text-xs text-slate-400">{screenOn ? 'Active' : 'Idle'}</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-slate-300">Audio Stream</span>
+                    <div className="flex items-center gap-2">
+                      <div className={`w-2 h-2 rounded-full ${micOn ? 'bg-fuchsia-400 shadow-[0_0_8px_#e879f9]' : 'bg-slate-600'}`}></div>
+                      <span className="text-xs text-slate-400">{micOn ? 'Active' : 'Idle'}</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-slate-300">Gemini</span>
+                    <div className="flex items-center gap-2">
+                      <div className={`w-2 h-2 rounded-full ${geminiStatus.backendUp && geminiStatus.mode === 'gemini' ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]' : geminiStatus.backendUp ? 'bg-amber-400 shadow-[0_0_8px_#f59e0b]' : 'bg-red-400'}`}></div>
+                      <span className="text-xs text-slate-400">
+                        {!geminiStatus.backendUp ? 'Backend Down' : geminiStatus.mode === 'gemini' ? 'Live' : 'Mock'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Plan */}
+              <div>
+                <div className="flex items-center justify-between mb-3 gap-2">
+                  <h3 className="text-xs uppercase text-slate-500 tracking-wider font-semibold flex items-center gap-2">
+                    <FileText size={14} /> Agent Action Plan
+                  </h3>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setActionRunnerOn((prev) => !prev)}
+                      className={`text-[10px] px-2 py-1 rounded-full border transition ${actionRunnerOn ? "border-emerald-400/60 text-emerald-300 bg-emerald-500/10" : "border-white/15 text-slate-400 hover:text-slate-200"}`}
+                      title="Auto execute new action plans"
+                    >
+                      {actionRunnerOn ? "Auto ON" : "Auto OFF"}
+                    </button>
+                    <button
+                      onClick={() => void runActionPlan()}
+                      disabled={actionSteps.length === 0 || executingStepIndex !== null}
+                      className="text-[10px] px-2 py-1 rounded-full border border-indigo-400/50 text-indigo-300 bg-indigo-500/10 disabled:opacity-40"
+                      title="Execute full action plan"
+                    >
+                      Run All
+                    </button>
+                    <button
+                      onClick={runActionPlanRemote}
+                      disabled={actionSteps.length === 0 || wsState !== "open"}
+                      className="text-[10px] px-2 py-1 rounded-full border border-cyan-400/50 text-cyan-300 bg-cyan-500/10 disabled:opacity-40"
+                      title="Run plan in backend-controlled browser (Lightpanda/CDP)"
+                    >
+                      Run Remote
+                    </button>
+                  </div>
+                </div>
+                <input
+                  value={remoteStartUrl}
+                  onChange={(e) => setRemoteStartUrl(e.target.value)}
+                  placeholder="Remote start URL (e.g. https://app.example.com)"
+                  className="w-full mb-3 bg-[#17181a] border border-white/10 rounded-lg px-2.5 py-2 text-xs text-slate-200 placeholder:text-slate-500 outline-none"
+                />
+                {actionSteps.length === 0 ? (
+                  <div className="text-center p-6 border border-white/5 border-dashed rounded-2xl text-slate-500 text-sm">
+                    Waiting for agent to propose actions based on screen context.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {actionSteps.map((step, idx) => (
+                      <motion.div
+                        initial={{ opacity: 0, x: 20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        key={idx}
+                        className="bg-[#1E1F20] rounded-xl p-3.5 border border-white/5 border-l-2 border-l-indigo-500"
+                      >
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-[10px] bg-indigo-500/20 text-indigo-300 px-1.5 py-0.5 rounded font-mono">STEP {idx + 1}</span>
+                          <span className="text-sm font-semibold text-slate-200 capitalize">{step.type || 'Action'}</span>
+                        </div>
+                        {step.target && <p className="text-xs text-slate-400 break-all"><span className="text-slate-500">Target:</span> {step.target}</p>}
+                        {step.text && <p className="text-xs text-slate-400 mt-1"><span className="text-slate-500">Value:</span> {step.text}</p>}
+                        <div className="mt-2">
+                          <button
+                            onClick={() => void executeActionStep(step, idx)}
+                            disabled={executingStepIndex !== null}
+                            className="text-[10px] px-2 py-1 rounded-full border border-white/15 text-slate-300 hover:text-white hover:bg-white/10 disabled:opacity-40"
+                          >
+                            {executingStepIndex === idx ? "Running..." : "Run Step"}
+                          </button>
+                        </div>
+                      </motion.div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+            </div>
+          </motion.aside>
+        )}
+      </AnimatePresence>
+
+      <footer className="hidden sm:block absolute bottom-2 left-6 z-30 text-[11px] text-slate-500">
+        Synapse AI | Developer - aryaninvincible
+      </footer>
+
+      <video ref={videoRef} style={{ display: "none" }} playsInline muted />
     </div>
   );
 }
