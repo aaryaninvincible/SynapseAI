@@ -8,7 +8,8 @@ from typing import Any
 from .models import AgentReply
 
 PROMPT = """You are Synapse AI Support Copilot.
-Return concise troubleshooting guidance and output a JSON action plan.
+Return concise troubleshooting guidance in plain conversational English.
+Also include a structured action plan when asked for JSON output.
 Always prefer reversible steps and ask for confirmation when uncertain.
 If asked who built you / who made you / your developer / creator identity, answer exactly: Built by Aryan."""
 
@@ -362,7 +363,7 @@ class GeminiLiveAdapter:
         try:
             data = json.loads(cleaned)
             if isinstance(data, dict):
-                return data
+                return self._normalize_model_payload(data)
         except Exception:
             pass
         
@@ -372,19 +373,55 @@ class GeminiLiveAdapter:
             if match:
                 data = json.loads(match.group(1))
                 if isinstance(data, dict):
-                    return data
+                    return self._normalize_model_payload(data)
             match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
             if match:
                 data = json.loads(match.group(1))
                 if isinstance(data, dict):
-                    return data
+                    return self._normalize_model_payload(data)
         except Exception:
             pass
+
+        if self._looks_like_json(cleaned):
+            return {
+                "spoken_text": "I analyzed your request. I can walk you through the next step now.",
+                "action_plan": self._default_action_plan(),
+            }
 
         return {
             "spoken_text": cleaned,
             "action_plan": self._default_action_plan(),
         }
+
+    def _normalize_model_payload(self, data: dict[str, Any]) -> dict[str, Any]:
+        spoken_text = data.get("spoken_text")
+        if not isinstance(spoken_text, str) or not spoken_text.strip():
+            fallback = data.get("spoken_summary") or data.get("summary") or data.get("message")
+            if not isinstance(fallback, str):
+                action_plan = data.get("action_plan")
+                if isinstance(action_plan, dict):
+                    fallback = action_plan.get("spoken_summary")
+            spoken_text = fallback if isinstance(fallback, str) and fallback.strip() else "I analyzed your request. Let's try the next step."
+
+        action_plan = data.get("action_plan")
+        if not isinstance(action_plan, dict):
+            action_plan = self._default_action_plan()
+
+        return {
+            "spoken_text": spoken_text.strip(),
+            "action_plan": action_plan,
+        }
+
+    def _looks_like_json(self, text: str) -> bool:
+        stripped = text.strip()
+        if not stripped:
+            return False
+        return (
+            (stripped.startswith("{") and stripped.endswith("}"))
+            or (stripped.startswith("[") and stripped.endswith("]"))
+            or '"spoken_text"' in stripped
+            or '"action_plan"' in stripped
+        )
 
     def status(self) -> dict[str, Any]:
         return {
