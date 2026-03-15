@@ -7,6 +7,13 @@ from typing import Any
 
 from .models import AgentReply
 
+try:
+    from google import genai
+    from google.genai import types
+    HAS_GENAI = True
+except ImportError:
+    HAS_GENAI = False
+
 PROMPT = """You are Synapse AI Support Copilot.
 Return concise troubleshooting guidance in plain conversational English.
 Also include a structured action plan when asked for JSON output.
@@ -26,10 +33,8 @@ class GeminiLiveAdapter:
         self._live_lock = asyncio.Lock()
 
         for key in api_keys:
-            if key:
+            if key and HAS_GENAI:
                 try:
-                    from google import genai
-
                     self._clients.append(genai.Client(api_key=key))
                 except Exception:
                     pass
@@ -46,7 +51,8 @@ class GeminiLiveAdapter:
             print("Rotated Gemini client to key index:", self._current_client_idx)
 
     async def generate(self, session_id: str, user_text: str, latest_frame: str | None = None) -> AgentReply:
-        if not self._client:
+        client = self._client
+        if not client:
             if self.openrouter_api_key:
                 ret = await self._generate_openrouter(user_text, latest_frame)
                 if ret:
@@ -60,8 +66,6 @@ class GeminiLiveAdapter:
                 return live_reply
 
         try:
-            from google.genai import types
-
             contents: list[Any] = [
                 types.Part.from_text(
                     text=(
@@ -76,7 +80,7 @@ class GeminiLiveAdapter:
             if image_part:
                 contents.append(image_part)
 
-            resp = self._client.models.generate_content(
+            resp = client.models.generate_content(
                 model=self.fallback_model,
                 contents=contents,
                 config=types.GenerateContentConfig(
@@ -153,8 +157,6 @@ class GeminiLiveAdapter:
             return False
         try:
             audio_bytes = base64.b64decode(audio_base64, validate=True)
-            from google.genai import types
-
             audio_blob = types.Blob(data=audio_bytes, mime_type=mime_type or "audio/webm")
             await live_session.send_realtime_input(audio=audio_blob)
             return True
@@ -174,16 +176,15 @@ class GeminiLiveAdapter:
             except Exception:
                 return
 
-    async def _ensure_live_session(self, session_id: str) -> Any | None:
-        if not self._client:
+    async def _ensure_live_session(self, session_id: str) -> Any:
+        client = self._client
+        if not client:
             return None
         async with self._live_lock:
             if session_id in self._live_sessions:
                 return self._live_sessions[session_id]
             try:
-                from google.genai import types
-
-                ctx = self._client.aio.live.connect(
+                ctx = client.aio.live.connect(
                     model=self.live_model,
                     config=types.LiveConnectConfig(system_instruction=PROMPT),
                 )
@@ -197,8 +198,6 @@ class GeminiLiveAdapter:
         self, live_session: Any, user_text: str, latest_frame: str | None
     ) -> AgentReply | None:
         try:
-            from google.genai import types
-
             if latest_frame:
                 image_blob = self._blob_from_data_url(latest_frame)
                 if image_blob:
@@ -209,7 +208,7 @@ class GeminiLiveAdapter:
                 turn_complete=True,
             )
 
-            collected = ""
+            collected: list[str] = []
             async for message in live_session.receive():
                 server_content = getattr(message, "server_content", None)
                 if not server_content:
@@ -220,13 +219,14 @@ class GeminiLiveAdapter:
                     for part in model_turn.parts:
                         text = getattr(part, "text", None)
                         if text:
-                            collected += text
+                            collected.append(str(text))
                 if getattr(server_content, "turn_complete", False):
                     break
 
-            if not collected.strip():
+            collected_str = "".join(collected).strip()
+            if not collected_str:
                 return None
-            parsed = self._parse_or_wrap(collected)
+            parsed = self._parse_or_wrap(collected_str)
             spoken_text = parsed.get("spoken_text", "I analyzed your request. Let's try the next step.")
             spoken_text = self._apply_identity_override(user_text, spoken_text)
             return AgentReply(
@@ -279,17 +279,9 @@ class GeminiLiveAdapter:
         import json
         
         req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers=headers, method="POST")
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         
-        def _make_req() -> str | None:
-            try:
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    return resp.read().decode("utf-8")
-            except Exception as e:
-                print("OpenRouter error:", e)
-                return None
-                
-        resp_text = await loop.run_in_executor(None, _make_req)
+        resp_text = await loop.run_in_executor(None, self._make_openrouter_request, url, headers, data)
         if not resp_text:
             return None
             
@@ -305,6 +297,18 @@ class GeminiLiveAdapter:
             )
         except Exception as e:
             print("OpenRouter parsing error:", e)
+            return None
+
+    @staticmethod
+    def _make_openrouter_request(url: str, headers: dict[str, str], data: dict[str, Any]) -> str | None:
+        try:
+            import urllib.request
+            import json
+            req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return resp.read().decode("utf-8")
+        except Exception as e:
+            print("OpenRouter error:", e)
             return None
 
     def _apply_identity_override(self, user_text: str, spoken_text: str) -> str:
@@ -333,26 +337,30 @@ class GeminiLiveAdapter:
         }
 
     def _image_part_from_data_url(self, latest_frame: str | None) -> Any | None:
-        if not latest_frame or not latest_frame.startswith("data:"):
+        if latest_frame is None or not latest_frame.startswith("data:"):
             return None
         try:
-            from google.genai import types
-
-            head, payload = latest_frame.split(",", 1)
-            mime_type = head.split(";")[0].replace("data:", "").strip() or "image/jpeg"
+            parts = str(latest_frame).split(",", 1)
+            if len(parts) < 2:
+                return None
+            head, payload = parts
+            parsed_mime = head.split(";")[0]
+            mime_type = parsed_mime.replace("data:", "").strip() if parsed_mime else "image/jpeg"
             image_bytes = base64.b64decode(payload, validate=True)
             return types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
         except Exception:
             return None
 
     def _blob_from_data_url(self, data_url: str | None) -> Any | None:
-        if not data_url or not data_url.startswith("data:"):
+        if data_url is None or not data_url.startswith("data:"):
             return None
         try:
-            from google.genai import types
-
-            head, payload = data_url.split(",", 1)
-            mime_type = head.split(";")[0].replace("data:", "").strip() or "application/octet-stream"
+            parts = str(data_url).split(",", 1)
+            if len(parts) < 2:
+                return None
+            head, payload = parts
+            parsed_mime = head.split(";")[0]
+            mime_type = parsed_mime.replace("data:", "").strip() if parsed_mime else "application/octet-stream"
             raw_bytes = base64.b64decode(payload, validate=True)
             return types.Blob(data=raw_bytes, mime_type=mime_type)
         except Exception:
@@ -408,7 +416,7 @@ class GeminiLiveAdapter:
             action_plan = self._default_action_plan()
 
         return {
-            "spoken_text": spoken_text.strip(),
+            "spoken_text": (spoken_text or "").strip(),
             "action_plan": action_plan,
         }
 
