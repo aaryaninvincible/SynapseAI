@@ -41,6 +41,24 @@ Backend env vars:
 - `GEMINI_FALLBACK_MODEL`: defaults to `gemini-2.5-flash`.
 - `GCP_PROJECT_ID`: enables Firestore persistence when set with valid auth.
 - `GCS_BUCKET_NAME`: optional; stores periodic frame snapshots as text blobs.
+- `BROWSER_CDP_URL`: optional CDP websocket endpoint for remote action execution (example: `ws://127.0.0.1:9222`).
+- `BROWSER_HEADLESS`: optional, defaults to `true` for local Playwright browser launch when CDP URL is not set.
+
+### Optional: Remote Browser Runner (Lightpanda compatible)
+
+To execute action plans in a backend-controlled browser:
+
+1. Start a CDP-compatible browser (Lightpanda example):
+```bash
+docker run -d --name lightpanda -p 9222:9222 lightpanda/browser:nightly
+```
+2. Set backend env:
+```bash
+BROWSER_CDP_URL=ws://127.0.0.1:9222
+```
+3. In the web UI action panel, use `Run Remote` and provide a start URL.
+
+This lets Synapse execute `navigate/click/type/scroll/wait` steps in the remote browser session.
 
 ## Current Status
 

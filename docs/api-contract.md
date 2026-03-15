@@ -35,7 +35,7 @@ Inbound message:
 
 ```json
 {
-  "type": "user_text | video_frame | audio_chunk | interrupt",
+  "type": "user_text | video_frame | audio_chunk | interrupt | action_execution_result | execute_action_plan",
   "payload": {}
 }
 ```
@@ -70,4 +70,3 @@ Outbound message:
   "spoken_summary": "Fill the missing required email field and submit again."
 }
 ```
-

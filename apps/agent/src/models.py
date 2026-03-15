@@ -3,7 +3,14 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
-EventType = Literal["user_text", "video_frame", "audio_chunk", "interrupt"]
+EventType = Literal[
+    "user_text",
+    "video_frame",
+    "audio_chunk",
+    "interrupt",
+    "action_execution_result",
+    "execute_action_plan",
+]
 ServerEventType = Literal["agent_text_delta", "agent_action_plan", "state_update", "error"]
 
 
@@ -33,4 +40,3 @@ class WsServerEvent(BaseModel):
 class AgentReply(BaseModel):
     spoken_text: str
     action_plan: dict[str, Any]
-

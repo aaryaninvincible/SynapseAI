@@ -5,6 +5,7 @@ from uuid import uuid4
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
+from .browser_automation import BrowserAutomationService
 from .config import get_settings
 from .gemini_live import GeminiLiveAdapter
 from .models import EndSessionResponse, StartSessionRequest, StartSessionResponse, WsClientEvent
@@ -19,7 +20,11 @@ gemini = GeminiLiveAdapter(
     fallback_model=settings.gemini_fallback_model,
 )
 persistence = PersistenceService(project_id=settings.gcp_project_id, bucket_name=settings.gcs_bucket_name)
-sessions = SessionManager(gemini=gemini, persistence=persistence)
+browser_automation = BrowserAutomationService(
+    cdp_url=settings.browser_cdp_url,
+    headless=settings.browser_headless,
+)
+sessions = SessionManager(gemini=gemini, persistence=persistence, browser_automation=browser_automation)
 
 app = FastAPI(title="Synapse AI Agent API", version="0.1.0")
 app.add_middleware(

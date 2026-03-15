@@ -17,6 +17,8 @@ class Settings:
         self.allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
         self.gcp_project_id = getenv("GCP_PROJECT_ID", "").strip()
         self.gcs_bucket_name = getenv("GCS_BUCKET_NAME", "").strip()
+        self.browser_cdp_url = getenv("BROWSER_CDP_URL", "").strip()
+        self.browser_headless = getenv("BROWSER_HEADLESS", "true").strip().lower() != "false"
 
 
 @lru_cache(maxsize=1)

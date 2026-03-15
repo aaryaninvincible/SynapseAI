@@ -16,6 +16,7 @@ type ActionStep = {
   target?: string;
   text?: string;
   bbox?: [number, number, number, number];
+  delay_ms?: number;
 };
 
 type ChatSession = {
@@ -58,6 +59,10 @@ export default function App() {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [isLightMode, setIsLightMode] = useState(false);
   const [isBooting, setIsBooting] = useState(true);
+  const [isMobileDevice, setIsMobileDevice] = useState(false);
+  const [executingStepIndex, setExecutingStepIndex] = useState<number | null>(null);
+  const [actionRunnerOn, setActionRunnerOn] = useState(false);
+  const [remoteStartUrl, setRemoteStartUrl] = useState("https://example.com");
 
   const wsRef = useRef<WebSocket | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -71,6 +76,7 @@ export default function App() {
   const closingSessionRef = useRef(false);
   const particleCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const speechOnRef = useRef(false);
+  const actionPlanSigRef = useRef<string>("");
 
   const wsUrl = useMemo(() => {
     if (!sessionId) return "";
@@ -85,6 +91,15 @@ export default function App() {
   const append = (role: TimelineItem["role"], text: string) => {
     setTimeline((prev) => [...prev, { role, text }]);
   };
+
+  const supportsMicCapture =
+    typeof navigator !== "undefined" &&
+    !!navigator.mediaDevices &&
+    typeof navigator.mediaDevices.getUserMedia === "function";
+  const supportsScreenCapture =
+    typeof navigator !== "undefined" &&
+    !!navigator.mediaDevices &&
+    typeof (navigator.mediaDevices as MediaDevices & { getDisplayMedia?: unknown }).getDisplayMedia === "function";
 
   const requestSessionEnd = (targetSessionId: string, preferBeacon = false) => {
     const url = `${API_BASE}/session/${targetSessionId}/end`;
@@ -180,6 +195,17 @@ export default function App() {
   useEffect(() => {
     const timer = window.setTimeout(() => setIsBooting(false), 1700);
     return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    const detectMobile = () => {
+      const byWidth = window.matchMedia("(max-width: 768px)").matches;
+      const byUa = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+      setIsMobileDevice(byWidth || byUa);
+    };
+    detectMobile();
+    window.addEventListener("resize", detectMobile);
+    return () => window.removeEventListener("resize", detectMobile);
   }, []);
 
   useEffect(() => {
@@ -386,6 +412,10 @@ export default function App() {
         const status = String(event.payload.status ?? "updated");
         if (status === "interrupted") {
           append("system", "Interrupted");
+        } else if (status === "remote_action_plan_executed") {
+          const ok = Boolean(event.payload.ok);
+          const message = String(event.payload.message ?? "Remote execution done");
+          append("system", `${ok ? "Remote runner success:" : "Remote runner failed:"} ${message}`);
         }
       } else if (event.type === "error") {
         append("system", `Error: ${String(event.payload.message ?? "unknown")}`);
@@ -431,6 +461,14 @@ export default function App() {
   };
 
   const startScreen = async () => {
+    if (!supportsScreenCapture) {
+      append("system", "Screen share is not supported in this browser.");
+      return;
+    }
+    if (isMobileDevice) {
+      append("system", "Phone browsers usually block full screen-share capture. Please use desktop for screen sharing.");
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: { frameRate: 5 },
@@ -459,7 +497,8 @@ export default function App() {
           stopScreen();
       };
     } catch (e) {
-        console.error("Screen share cancelled or failed.");
+        console.error("Screen share cancelled or failed.", e);
+        append("system", "Screen share was cancelled or blocked by the browser.");
     }
   };
 
@@ -486,6 +525,10 @@ export default function App() {
     });
 
   const startMic = async () => {
+    if (!supportsMicCapture) {
+      append("system", "Microphone capture is not supported in this browser.");
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       micStreamRef.current = stream;
@@ -504,7 +547,8 @@ export default function App() {
       recorder.start(500);
       setMicOn(true);
     } catch (e) {
-      console.error("Mic access denied or failed.");
+      console.error("Mic access denied or failed.", e);
+      append("system", "Microphone access failed. Check browser permissions and use HTTPS.");
     }
   };
 
@@ -584,6 +628,125 @@ export default function App() {
   };
 
   const actionSteps = (actionPlan?.steps as ActionStep[] | undefined) ?? [];
+  const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+  const getElementForStep = (step: ActionStep): HTMLElement | null => {
+    if (Array.isArray(step.bbox) && step.bbox.length === 4) {
+      const [x, y, w, h] = step.bbox;
+      const px = Math.min(window.innerWidth - 1, Math.max(0, Math.floor((x + w / 2) * window.innerWidth)));
+      const py = Math.min(window.innerHeight - 1, Math.max(0, Math.floor((y + h / 2) * window.innerHeight)));
+      const fromPoint = document.elementFromPoint(px, py);
+      if (fromPoint instanceof HTMLElement) return fromPoint;
+    }
+    if (step.target && /[#.\[]/.test(step.target)) {
+      const bySelector = document.querySelector(step.target);
+      if (bySelector instanceof HTMLElement) return bySelector;
+    }
+    if (document.activeElement instanceof HTMLElement) {
+      return document.activeElement;
+    }
+    return null;
+  };
+
+  const reportActionExecution = (payload: Record<string, unknown>) => {
+    if (wsState === "open") {
+      sendEvent("action_execution_result", payload);
+    }
+  };
+
+  const executeActionStep = async (step: ActionStep, idx: number) => {
+    setExecutingStepIndex(idx);
+    const normalizedType = (step.type || "").toLowerCase().trim();
+    try {
+      if (step.delay_ms && step.delay_ms > 0) {
+        await sleep(step.delay_ms);
+      }
+
+      if (normalizedType === "wait") {
+        const parsedWait = Number(step.text ?? step.target ?? 800);
+        const waitMs = Number.isFinite(parsedWait) ? Math.max(100, parsedWait) : 800;
+        await sleep(waitMs);
+        append("system", `Step ${idx + 1}: waited ${waitMs}ms.`);
+        reportActionExecution({ status: "ok", step_index: idx, step_type: "wait", wait_ms: waitMs });
+        return;
+      }
+
+      if (normalizedType === "scroll") {
+        const amount = Number(step.text ?? 480);
+        const y = Number.isFinite(amount) ? amount : 480;
+        window.scrollBy({ top: y, behavior: "smooth" });
+        append("system", `Step ${idx + 1}: scrolled ${y}px.`);
+        reportActionExecution({ status: "ok", step_index: idx, step_type: "scroll", amount: y });
+        return;
+      }
+
+      if (normalizedType === "click") {
+        const el = getElementForStep(step);
+        if (!el) throw new Error("No element found for click.");
+        el.focus();
+        el.click();
+        append("system", `Step ${idx + 1}: clicked ${step.target || "resolved element"}.`);
+        reportActionExecution({ status: "ok", step_index: idx, step_type: "click", target: step.target ?? null });
+        return;
+      }
+
+      if (normalizedType === "type") {
+        const el = getElementForStep(step);
+        const value = String(step.text ?? "");
+        if (!el) throw new Error("No target input found.");
+        if (
+          el instanceof HTMLInputElement ||
+          el instanceof HTMLTextAreaElement
+        ) {
+          el.focus();
+          el.value = value;
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          append("system", `Step ${idx + 1}: typed into ${step.target || "input"}.`);
+          reportActionExecution({ status: "ok", step_index: idx, step_type: "type", target: step.target ?? null });
+          return;
+        }
+        throw new Error("Resolved element is not a text input.");
+      }
+
+      throw new Error(`Unsupported step type: ${step.type || "unknown"}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Action failed";
+      append("system", `Step ${idx + 1} failed: ${message}`);
+      reportActionExecution({
+        status: "failed",
+        step_index: idx,
+        step_type: normalizedType || "unknown",
+        reason: message,
+      });
+    } finally {
+      setExecutingStepIndex(null);
+    }
+  };
+
+  const runActionPlan = async () => {
+    for (let i = 0; i < actionSteps.length; i += 1) {
+      await executeActionStep(actionSteps[i], i);
+      await sleep(250);
+    }
+  };
+
+  const runActionPlanRemote = () => {
+    if (actionSteps.length === 0) return;
+    sendEvent("execute_action_plan", {
+      steps: actionSteps,
+      start_url: remoteStartUrl.trim() || undefined,
+    });
+    append("system", "Submitted action plan to remote browser runner.");
+  };
+
+  useEffect(() => {
+    if (!actionRunnerOn || actionSteps.length === 0) return;
+    const sig = JSON.stringify(actionSteps);
+    if (sig === actionPlanSigRef.current) return;
+    actionPlanSigRef.current = sig;
+    void runActionPlan();
+  }, [actionRunnerOn, actionSteps]);
 
   return (
     <div
@@ -903,9 +1066,9 @@ export default function App() {
                                     {/* Mic Toggle */}
                                     <button 
                                         onClick={micOn ? stopMic : startMic} 
-                                        disabled={wsState !== "open"}
+                                        disabled={wsState !== "open" || !supportsMicCapture}
                                         className={`p-2 rounded-full transition-all relative ${micOn ? 'text-rose-400 bg-rose-400/15' : 'text-[#6E6E73] hover:bg-white/10 hover:text-white disabled:opacity-50'}`}
-                                        title={micOn ? "Mute Microphone" : "Unmute Microphone"}
+                                        title={!supportsMicCapture ? "Microphone is unavailable in this browser" : micOn ? "Mute Microphone" : "Unmute Microphone"}
                                     >
                                         <Mic size={18} />
                                         {micOn && (
@@ -916,9 +1079,17 @@ export default function App() {
                                     {/* Screen Share Toggle */}
                                     <button 
                                         onClick={screenOn ? stopScreen : startScreen} 
-                                        disabled={wsState !== "open"}
+                                        disabled={wsState !== "open" || !supportsScreenCapture || isMobileDevice}
                                         className={`p-2 rounded-full transition-all ${screenOn ? 'text-indigo-400 bg-indigo-400/15' : 'text-[#6E6E73] hover:bg-white/10 hover:text-white disabled:opacity-50'}`}
-                                        title={screenOn ? "Stop Screen Share" : "Start Screen Share"}
+                                        title={
+                                          !supportsScreenCapture
+                                            ? "Screen share is unavailable in this browser"
+                                            : isMobileDevice
+                                              ? "Screen share is desktop-only in most phone browsers"
+                                              : screenOn
+                                                ? "Stop Screen Share"
+                                                : "Start Screen Share"
+                                        }
                                     >
                                         <MonitorUp size={18} />
                                     </button>
@@ -1151,9 +1322,42 @@ export default function App() {
 
                         {/* Action Plan */}
                         <div>
-                            <h3 className="text-xs uppercase text-slate-500 tracking-wider mb-3 font-semibold flex items-center gap-2">
-                                <FileText size={14} /> Agent Action Plan
-                            </h3>
+                            <div className="flex items-center justify-between mb-3 gap-2">
+                                <h3 className="text-xs uppercase text-slate-500 tracking-wider font-semibold flex items-center gap-2">
+                                    <FileText size={14} /> Agent Action Plan
+                                </h3>
+                                <div className="flex items-center gap-2">
+                                    <button
+                                      onClick={() => setActionRunnerOn((prev) => !prev)}
+                                      className={`text-[10px] px-2 py-1 rounded-full border transition ${actionRunnerOn ? "border-emerald-400/60 text-emerald-300 bg-emerald-500/10" : "border-white/15 text-slate-400 hover:text-slate-200"}`}
+                                      title="Auto execute new action plans"
+                                    >
+                                      {actionRunnerOn ? "Auto ON" : "Auto OFF"}
+                                    </button>
+                                    <button
+                                      onClick={() => void runActionPlan()}
+                                      disabled={actionSteps.length === 0 || executingStepIndex !== null}
+                                      className="text-[10px] px-2 py-1 rounded-full border border-indigo-400/50 text-indigo-300 bg-indigo-500/10 disabled:opacity-40"
+                                      title="Execute full action plan"
+                                    >
+                                      Run All
+                                    </button>
+                                    <button
+                                      onClick={runActionPlanRemote}
+                                      disabled={actionSteps.length === 0 || wsState !== "open"}
+                                      className="text-[10px] px-2 py-1 rounded-full border border-cyan-400/50 text-cyan-300 bg-cyan-500/10 disabled:opacity-40"
+                                      title="Run plan in backend-controlled browser (Lightpanda/CDP)"
+                                    >
+                                      Run Remote
+                                    </button>
+                                </div>
+                            </div>
+                            <input
+                              value={remoteStartUrl}
+                              onChange={(e) => setRemoteStartUrl(e.target.value)}
+                              placeholder="Remote start URL (e.g. https://app.example.com)"
+                              className="w-full mb-3 bg-[#17181a] border border-white/10 rounded-lg px-2.5 py-2 text-xs text-slate-200 placeholder:text-slate-500 outline-none"
+                            />
                             {actionSteps.length === 0 ? (
                                 <div className="text-center p-6 border border-white/5 border-dashed rounded-2xl text-slate-500 text-sm">
                                     Waiting for agent to propose actions based on screen context.
@@ -1173,6 +1377,15 @@ export default function App() {
                                             </div>
                                             {step.target && <p className="text-xs text-slate-400 break-all"><span className="text-slate-500">Target:</span> {step.target}</p>}
                                             {step.text && <p className="text-xs text-slate-400 mt-1"><span className="text-slate-500">Value:</span> {step.text}</p>}
+                                            <div className="mt-2">
+                                                <button
+                                                  onClick={() => void executeActionStep(step, idx)}
+                                                  disabled={executingStepIndex !== null}
+                                                  className="text-[10px] px-2 py-1 rounded-full border border-white/15 text-slate-300 hover:text-white hover:bg-white/10 disabled:opacity-40"
+                                                >
+                                                  {executingStepIndex === idx ? "Running..." : "Run Step"}
+                                                </button>
+                                            </div>
                                         </motion.div>
                                     ))}
                                 </div>

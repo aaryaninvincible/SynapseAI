@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from .browser_automation import BrowserAutomationService
 from .gemini_live import GeminiLiveAdapter
 from .models import WsServerEvent
 from .persistence import PersistenceService
@@ -19,9 +20,15 @@ class SessionState:
 
 
 class SessionManager:
-    def __init__(self, gemini: GeminiLiveAdapter, persistence: PersistenceService) -> None:
+    def __init__(
+        self,
+        gemini: GeminiLiveAdapter,
+        persistence: PersistenceService,
+        browser_automation: BrowserAutomationService | None = None,
+    ) -> None:
         self.gemini = gemini
         self.persistence = persistence
+        self.browser_automation = browser_automation
         self.sessions: dict[str, SessionState] = {}
 
     def create(self, session_id: str, user_id: str | None = None) -> None:
@@ -83,6 +90,63 @@ class SessionManager:
                         payload={"status": "audio_streaming", "chunks_received": state.audio_chunk_count},
                     )
                 )
+            return out
+
+        if event_type == "action_execution_result":
+            status = str(payload.get("status", "unknown"))
+            step_type = str(payload.get("step_type", "unknown"))
+            self.persistence.append_event(
+                session_id,
+                "system",
+                {
+                    "type": "action_execution_result",
+                    "status": status,
+                    "step_type": step_type,
+                    "details": payload,
+                },
+            )
+            out.append(
+                WsServerEvent(
+                    type="state_update",
+                    payload={"status": "action_executed", "step_type": step_type, "result": status},
+                )
+            )
+            return out
+
+        if event_type == "execute_action_plan":
+            if not self.browser_automation:
+                out.append(
+                    WsServerEvent(
+                        type="error",
+                        payload={"message": "Browser automation is not configured on backend."},
+                    )
+                )
+                return out
+            raw_steps = payload.get("steps")
+            steps = raw_steps if isinstance(raw_steps, list) else []
+            start_url = str(payload.get("start_url", "")).strip() or None
+            result = await self.browser_automation.execute(steps=steps, start_url=start_url)
+            self.persistence.append_event(
+                session_id,
+                "system",
+                {
+                    "type": "execute_action_plan",
+                    "ok": result.ok,
+                    "message": result.message,
+                    "steps": result.steps,
+                },
+            )
+            out.append(
+                WsServerEvent(
+                    type="state_update",
+                    payload={
+                        "status": "remote_action_plan_executed",
+                        "ok": result.ok,
+                        "message": result.message,
+                        "steps": result.steps,
+                    },
+                )
+            )
             return out
 
         if event_type == "user_text":
