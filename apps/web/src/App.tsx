@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Mic, MonitorUp, Code, StopCircle, FileText, Send, Paperclip, ChevronRight, Sparkles, Activity, Volume2, VolumeX, MessageSquare, Trash2, LogOut } from "lucide-react";
+import { Mic, MonitorUp, Code, StopCircle, FileText, Send, Paperclip, ChevronRight, Sparkles, Activity, Volume2, VolumeX, MessageSquare, Trash2, LogOut, Sun, Moon } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { auth, db } from "./firebase";
 import { signInWithRedirect, GoogleAuthProvider, onAuthStateChanged, signOut, User } from "firebase/auth";
@@ -56,6 +56,8 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [isLightMode, setIsLightMode] = useState(false);
+  const [isBooting, setIsBooting] = useState(true);
 
   const wsRef = useRef<WebSocket | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -163,6 +165,22 @@ export default function App() {
   useEffect(() => {
     speechOnRef.current = speechOn;
   }, [speechOn]);
+
+  useEffect(() => {
+    const savedTheme = localStorage.getItem("synapse_theme");
+    if (savedTheme === "light") {
+      setIsLightMode(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem("synapse_theme", isLightMode ? "light" : "dark");
+  }, [isLightMode]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setIsBooting(false), 1700);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     const loadHealth = async () => {
@@ -568,7 +586,10 @@ export default function App() {
   const actionSteps = (actionPlan?.steps as ActionStep[] | undefined) ?? [];
 
   return (
-    <div className="dark h-[100svh] w-full flex text-[#E3E3E3] overflow-hidden relative selection:bg-indigo-500/30" style={{ fontFamily: "'Space Grotesk', sans-serif", backgroundColor: "#0b0c10" }}>
+    <div
+      className={`${isLightMode ? "theme-light" : "theme-dark"} h-[100svh] w-full flex overflow-hidden relative ${isLightMode ? "text-slate-800 selection:bg-purple-300/50" : "text-[#E3E3E3] selection:bg-indigo-500/30"}`}
+      style={{ fontFamily: "'Space Grotesk', sans-serif", backgroundColor: isLightMode ? "#eef3ff" : "#0b0c10" }}
+    >
         <style>
         {`
             ::-webkit-scrollbar {
@@ -613,6 +634,27 @@ export default function App() {
                 -webkit-backdrop-filter: blur(24px);
                 border: 1px solid rgba(255, 255, 255, 0.08);
             }
+            .theme-light .bg-glass {
+                background: rgba(255, 255, 255, 0.72) !important;
+                border-color: rgba(103, 80, 164, 0.16) !important;
+            }
+            .theme-light header,
+            .theme-light nav {
+                background: rgba(255, 255, 255, 0.74) !important;
+                border-color: rgba(103, 80, 164, 0.16) !important;
+            }
+            .theme-light aside,
+            .theme-light footer {
+                color: #4a5468 !important;
+            }
+            .theme-light .theme-card {
+                background: rgba(255, 255, 255, 0.82) !important;
+                border-color: rgba(103, 80, 164, 0.15) !important;
+                color: #1f2a44 !important;
+            }
+            .theme-light .theme-muted {
+                color: #5b6480 !important;
+            }
             .no-scrollbar::-webkit-scrollbar {
                 display: none;
             }
@@ -625,6 +667,35 @@ export default function App() {
             }
         `}
         </style>
+
+        <AnimatePresence>
+          {isBooting && (
+            <motion.div
+              initial={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.45 }}
+              className="absolute inset-0 z-[100] bg-[#09050f] flex items-center justify-center"
+            >
+              <div className="relative w-28 h-28">
+                <motion.div
+                  animate={{ rotate: 360 }}
+                  transition={{ repeat: Infinity, duration: 1.3, ease: "linear" }}
+                  className="absolute inset-0 rounded-full border-4 border-purple-500/30 border-t-purple-300"
+                />
+                <motion.div
+                  animate={{ rotate: -360 }}
+                  transition={{ repeat: Infinity, duration: 2, ease: "linear" }}
+                  className="absolute inset-3 rounded-full border-4 border-fuchsia-500/25 border-r-violet-400"
+                />
+                <motion.div
+                  animate={{ scale: [0.9, 1.1, 0.9], opacity: [0.6, 1, 0.6] }}
+                  transition={{ repeat: Infinity, duration: 1.2, ease: "easeInOut" }}
+                  className="absolute inset-[34%] rounded-full bg-gradient-to-br from-violet-300 to-fuchsia-500 shadow-[0_0_32px_rgba(168,85,247,0.6)]"
+                />
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Ambient Background Effects */}
         <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
@@ -656,7 +727,7 @@ export default function App() {
             {/* Header */}
             <header className="px-3 sm:px-6 lg:px-8 pt-[max(12px,env(safe-area-inset-top))] pb-3 sm:py-5 flex items-center justify-between gap-2 border-b border-white/5 bg-[#0b0c10]/75 backdrop-blur-md">
                 <div className="flex items-center gap-2 sm:gap-3">
-                    <img src="/logo.svg" alt="Synapse AI Logo" className="w-8 h-8 rounded-xl object-cover shadow-lg border border-white/20 bg-white/5" />
+                    <img src="/favicon.png" alt="Synapse AI Logo" className="w-9 h-9 rounded-xl object-cover object-center shadow-lg border border-white/20 bg-white/5" />
                     <h1 className="text-lg sm:text-xl font-medium tracking-wide">
                         <span className="gemini-gradient font-bold">Synapse</span>
                         <span className="hidden sm:inline gemini-gradient font-bold ml-1">AI</span>
@@ -677,6 +748,16 @@ export default function App() {
                       <span className="inline-flex items-center gap-1.5">
                         {speechOn ? <Volume2 size={14} /> : <VolumeX size={14} />}
                         <span className="hidden-xs">Voice {speechOn ? "On" : "Off"}</span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsLightMode((prev) => !prev)}
+                      className={`px-2.5 sm:px-3 py-2 rounded-full border text-xs sm:text-sm transition ${isLightMode ? "border-amber-300/70 text-amber-600 bg-amber-200/40" : "border-indigo-300/30 text-indigo-200 bg-indigo-500/10 hover:bg-indigo-500/20"}`}
+                    >
+                      <span className="inline-flex items-center gap-1.5">
+                        {isLightMode ? <Moon size={14} /> : <Sun size={14} />}
+                        <span className="hidden-xs">{isLightMode ? "Dark" : "Light"}</span>
                       </span>
                     </button>
                     {wsState === "idle" && (
@@ -719,15 +800,15 @@ export default function App() {
                 </div>
             </header>
             <nav className="px-2 sm:px-6 lg:px-8 py-2 border-b border-white/5 bg-[#0f1016]/70 backdrop-blur-md flex items-center justify-between gap-1">
-              <div className="flex items-center gap-1.5 overflow-x-auto whitespace-nowrap text-xs sm:text-sm text-slate-300 scrollbar-none no-scrollbar py-0.5">
-                <button onClick={() => setActiveTab("home")} className={`px-2.5 py-1.5 rounded-full border transition-colors ${activeTab === 'home' ? 'bg-white/10 border-white/20 text-white' : 'border-white/10 hover:bg-white/10'}`}>Home</button>
-                <button onClick={() => setActiveTab("history")} className={`px-2.5 py-1.5 rounded-full border transition-colors ${activeTab === 'history' ? 'bg-white/10 border-white/20 text-white' : 'border-white/10 hover:bg-white/10'}`}>History</button>
-                <button onClick={() => setActiveTab("features")} className={`px-2.5 py-1.5 rounded-full border transition-colors ${activeTab === 'features' ? 'bg-white/10 border-white/20 text-white' : 'border-white/10 hover:bg-white/10'}`}>Features</button>
-                <button onClick={() => setActiveTab("about")} className={`px-2.5 py-1.5 rounded-full border transition-colors ${activeTab === 'about' ? 'bg-white/10 border-white/20 text-white' : 'border-white/10 hover:bg-white/10'}`}>About</button>
+              <div className={`flex items-center gap-1.5 overflow-x-auto whitespace-nowrap text-xs sm:text-sm scrollbar-none no-scrollbar py-0.5 ${isLightMode ? "text-slate-700" : "text-slate-300"}`}>
+                <button onClick={() => setActiveTab("home")} className={`px-2.5 py-1.5 rounded-full border transition-colors ${activeTab === 'home' ? (isLightMode ? 'bg-violet-100 border-violet-300 text-violet-700' : 'bg-white/10 border-white/20 text-white') : (isLightMode ? 'border-violet-200 hover:bg-violet-50' : 'border-white/10 hover:bg-white/10')}`}>Home</button>
+                <button onClick={() => setActiveTab("history")} className={`px-2.5 py-1.5 rounded-full border transition-colors ${activeTab === 'history' ? (isLightMode ? 'bg-violet-100 border-violet-300 text-violet-700' : 'bg-white/10 border-white/20 text-white') : (isLightMode ? 'border-violet-200 hover:bg-violet-50' : 'border-white/10 hover:bg-white/10')}`}>History</button>
+                <button onClick={() => setActiveTab("features")} className={`px-2.5 py-1.5 rounded-full border transition-colors ${activeTab === 'features' ? (isLightMode ? 'bg-violet-100 border-violet-300 text-violet-700' : 'bg-white/10 border-white/20 text-white') : (isLightMode ? 'border-violet-200 hover:bg-violet-50' : 'border-white/10 hover:bg-white/10')}`}>Features</button>
+                <button onClick={() => setActiveTab("about")} className={`px-2.5 py-1.5 rounded-full border transition-colors ${activeTab === 'about' ? (isLightMode ? 'bg-violet-100 border-violet-300 text-violet-700' : 'bg-white/10 border-white/20 text-white') : (isLightMode ? 'border-violet-200 hover:bg-violet-50' : 'border-white/10 hover:bg-white/10')}`}>About</button>
               </div>
               <button 
                 onClick={newChat} 
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm rounded-full bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 transition-colors border border-indigo-500/20 whitespace-nowrap"
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm rounded-full transition-colors border whitespace-nowrap ${isLightMode ? "bg-violet-100 text-violet-700 hover:bg-violet-200 border-violet-300/80" : "bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 border-indigo-500/20"}`}
               >
                 <MessageSquare size={14} /> <span className="hidden-xs">New Chat</span>
               </button>
@@ -745,10 +826,10 @@ export default function App() {
                             className="flex flex-col items-center justify-center h-full text-center mt-10 sm:mt-16"
                         >
                             <div className="w-20 h-20 mb-6 rounded-full flex items-center justify-center">
-                                <img src="/logo.svg" alt="Synapse AI Logo" className="w-full h-full rounded-xl object-cover shadow-[0_0_30px_rgba(168,85,247,0.3)] border border-white/20 bg-white/5" />
+                                <img src="/favicon.png" alt="Synapse AI Logo" className="w-full h-full rounded-2xl object-cover object-center shadow-[0_0_30px_rgba(168,85,247,0.3)] border border-white/20 bg-white/5" />
                             </div>
                             <h2 className="text-xl sm:text-2xl md:text-3xl font-medium mb-3">Welcome to Synapse AI</h2>
-                            <p className="text-sm sm:text-base text-slate-400 max-w-xl px-4">Hi there. Session is ready in the background. Ask anything, share your screen when needed, and I will help you step by step.</p>
+                            <p className={`text-sm sm:text-base max-w-xl px-4 ${isLightMode ? "theme-muted" : "text-slate-400"}`}>Hi there. Session is ready in the background. Ask anything, share your screen when needed, and I will help you step by step.</p>
                         </motion.div>
                     ) : (
                         timeline.map((item, idx) => (
@@ -760,11 +841,11 @@ export default function App() {
                             >
                                 {item.role !== 'user' && (
                                     <div className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center mt-1 overflow-hidden shadow-lg border border-white/10">
-                                        {item.role === 'system' ? <Code size={14} className="text-white" /> : <img src="/logo.svg" alt="AI" className="w-full h-full object-cover" />}
+                                        {item.role === 'system' ? <Code size={14} className="text-white" /> : <img src="/favicon.png" alt="AI" className="w-full h-full object-cover" />}
                                     </div>
                                 )}
                                 
-                                <div className={`max-w-[80%] break-words whitespace-pre-wrap ${item.role === 'user' ? 'bg-[#282A2C] rounded-3xl rounded-tr-sm px-5 py-3.5' : item.role === 'system' ? 'bg-indigo-900/30 border border-indigo-500/20 text-indigo-200 rounded-2xl px-4 py-2 text-sm' : 'text-slate-200 text-lg leading-relaxed pt-1'}`}>
+                                <div className={`max-w-[80%] break-words whitespace-pre-wrap ${item.role === 'user' ? (isLightMode ? 'bg-violet-100 border border-violet-200 text-slate-800 rounded-3xl rounded-tr-sm px-5 py-3.5' : 'bg-[#282A2C] rounded-3xl rounded-tr-sm px-5 py-3.5') : item.role === 'system' ? (isLightMode ? 'bg-blue-100 border border-blue-200 text-blue-900 rounded-2xl px-4 py-2 text-sm' : 'bg-indigo-900/30 border border-indigo-500/20 text-indigo-200 rounded-2xl px-4 py-2 text-sm') : `${isLightMode ? 'text-slate-700' : 'text-slate-200'} text-lg leading-relaxed pt-1`}`}>
                                     {item.text}
                                 </div>
                             </motion.div>
@@ -777,7 +858,7 @@ export default function App() {
                             className="flex gap-4 justify-start"
                         >
                             <div className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center mt-1 overflow-hidden shadow-[0_0_15px_rgba(168,85,247,0.4)] border border-white/10">
-                                <img src="/logo.svg" alt="AI" className="w-full h-full object-cover" />
+                                <img src="/favicon.png" alt="AI" className="w-full h-full object-cover" />
                             </div>
                             
                             <div className="bg-transparent px-2 py-3.5 flex items-center gap-1.5 h-[48px]">
@@ -881,10 +962,10 @@ export default function App() {
             )}
 
             {activeTab === 'history' && (
-               <div className="flex-1 overflow-y-auto w-full max-w-5xl mx-auto px-4 sm:px-6 md:px-8 py-8 sm:py-12 flex flex-col gap-6 text-slate-200">
+                <div className={`flex-1 overflow-y-auto w-full max-w-5xl mx-auto px-4 sm:px-6 md:px-8 py-8 sm:py-12 flex flex-col gap-6 ${isLightMode ? "text-slate-700" : "text-slate-200"}`}>
                     <h2 className="text-3xl font-bold gemini-gradient">Past Conversations</h2>
                     {savedSessions.length === 0 ? (
-                        <div className="text-center py-12 text-slate-500 bg-[#1E1F20]/50 rounded-2xl border border-white/5">
+                        <div className={`text-center py-12 rounded-2xl border ${isLightMode ? "text-slate-600 bg-white/75 border-violet-200/80" : "text-slate-500 bg-[#1E1F20]/50 border-white/5"}`}>
                             <MessageSquare size={48} className="mx-auto mb-4 opacity-50" />
                             <p>No past conversations found.</p>
                         </div>
@@ -894,7 +975,7 @@ export default function App() {
                                 <div 
                                     key={s.id}
                                     onClick={() => loadSession(s)}
-                                    className="bg-[#1E1F20]/80 p-5 rounded-2xl border border-white/5 hover:border-indigo-500/40 hover:bg-[#1E1F20] transition-all cursor-pointer flex flex-col gap-3 group relative"
+                                    className={`p-5 rounded-2xl border transition-all cursor-pointer flex flex-col gap-3 group relative ${isLightMode ? "bg-white/80 border-violet-200/70 hover:border-violet-400/60 hover:bg-white" : "bg-[#1E1F20]/80 border-white/5 hover:border-indigo-500/40 hover:bg-[#1E1F20]"}`}
                                 >
                                     <div className="flex items-start justify-between">
                                         <div className="w-8 h-8 rounded-full bg-indigo-500/20 flex items-center justify-center shrink-0">
@@ -909,7 +990,7 @@ export default function App() {
                                         </button>
                                     </div>
                                     <div className="flex-1">
-                                        <h3 className="text-sm font-semibold text-slate-200 line-clamp-2 leading-tight">"{s.preview}"</h3>
+                                        <h3 className={`text-sm font-semibold line-clamp-2 leading-tight ${isLightMode ? "text-slate-800" : "text-slate-200"}`}>"{s.preview}"</h3>
                                         <p className="text-xs text-slate-500 mt-2">{new Date(s.date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</p>
                                     </div>
                                     <div className="absolute top-0 right-0 w-2 h-2 rounded-full bg-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity -mt-1 -mr-1 blur-[2px]"></div>
@@ -921,63 +1002,63 @@ export default function App() {
             )}
 
             {activeTab === 'features' && (
-               <div className="flex-1 overflow-y-auto w-full max-w-5xl mx-auto px-4 sm:px-6 md:px-8 py-8 sm:py-12 flex flex-col gap-6 text-slate-200">
+               <div className={`flex-1 overflow-y-auto w-full max-w-5xl mx-auto px-4 sm:px-6 md:px-8 py-8 sm:py-12 flex flex-col gap-6 ${isLightMode ? "text-slate-700" : "text-slate-200"}`}>
                     <h2 className="text-3xl font-bold gemini-gradient">Features</h2>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mt-4">
-                        <div className="bg-[#1E1F20]/80 p-6 rounded-2xl border border-white/5 hover:border-indigo-500/30 transition-colors">
+                        <div className={`p-6 rounded-2xl border transition-colors ${isLightMode ? "bg-white/85 border-violet-200/70 hover:border-violet-400/70" : "bg-[#1E1F20]/80 border-white/5 hover:border-indigo-500/30"}`}>
                             <h3 className="text-xl font-semibold mb-2 text-indigo-300 flex items-center gap-2"><Sparkles size={20}/> Live Agent Interactions</h3>
-                            <p className="text-slate-400">Interact in real-time with an AI agent equipped with voice synthesis and action planning. Get your answers instantly.</p>
+                            <p className={isLightMode ? "text-slate-600" : "text-slate-400"}>Interact in real-time with an AI agent equipped with voice synthesis and action planning. Get your answers instantly.</p>
                         </div>
-                        <div className="bg-[#1E1F20]/80 p-6 rounded-2xl border border-white/5 hover:border-fuchsia-500/30 transition-colors">
+                        <div className={`p-6 rounded-2xl border transition-colors ${isLightMode ? "bg-white/85 border-violet-200/70 hover:border-fuchsia-400/70" : "bg-[#1E1F20]/80 border-white/5 hover:border-fuchsia-500/30"}`}>
                             <h3 className="text-xl font-semibold mb-2 text-fuchsia-300 flex items-center gap-2"><MonitorUp size={20}/> Screen & Audio Vision</h3>
-                            <p className="text-slate-400">Share your desktop screen and microphone. The agent perceives the screen perfectly to assist you interactively.</p>
+                            <p className={isLightMode ? "text-slate-600" : "text-slate-400"}>Share your desktop screen and microphone. The agent perceives the screen perfectly to assist you interactively.</p>
                         </div>
-                        <div className="bg-[#1E1F20]/80 p-6 rounded-2xl border border-white/5 hover:border-emerald-500/30 transition-colors">
+                        <div className={`p-6 rounded-2xl border transition-colors ${isLightMode ? "bg-white/85 border-violet-200/70 hover:border-emerald-400/70" : "bg-[#1E1F20]/80 border-white/5 hover:border-emerald-500/30"}`}>
                             <h3 className="text-xl font-semibold mb-2 text-emerald-300 flex items-center gap-2"><StopCircle size={20}/> Interruptible Voice</h3>
-                            <p className="text-slate-400">Halt the agent at any point during tasks, redirect its attention, and get better results on the fly.</p>
+                            <p className={isLightMode ? "text-slate-600" : "text-slate-400"}>Halt the agent at any point during tasks, redirect its attention, and get better results on the fly.</p>
                         </div>
-                        <div className="bg-[#1E1F20]/80 p-6 rounded-2xl border border-white/5 hover:border-amber-500/30 transition-colors">
+                        <div className={`p-6 rounded-2xl border transition-colors ${isLightMode ? "bg-white/85 border-violet-200/70 hover:border-amber-400/70" : "bg-[#1E1F20]/80 border-white/5 hover:border-amber-500/30"}`}>
                             <h3 className="text-xl font-semibold mb-2 text-amber-300 flex items-center gap-2"><FileText size={20}/> Action Plan Display</h3>
-                            <p className="text-slate-400">View what the agent is thinking, planning, and executing behind the scenes inside the sidebar panel.</p>
+                            <p className={isLightMode ? "text-slate-600" : "text-slate-400"}>View what the agent is thinking, planning, and executing behind the scenes inside the sidebar panel.</p>
                         </div>
                     </div>
                </div>
             )}
 
             {activeTab === 'about' && (
-               <div className="flex-1 overflow-y-auto w-full max-w-4xl mx-auto px-4 sm:px-6 md:px-8 py-8 sm:py-12 flex flex-col gap-6 text-slate-200">
-                    <div className="bg-[#1E1F20]/80 p-6 sm:p-8 rounded-2xl border border-white/5 shadow-xl mb-6">
+               <div className={`flex-1 overflow-y-auto w-full max-w-4xl mx-auto px-4 sm:px-6 md:px-8 py-8 sm:py-12 flex flex-col gap-6 ${isLightMode ? "text-slate-700" : "text-slate-200"}`}>
+                    <div className={`p-6 sm:p-8 rounded-2xl border shadow-xl mb-6 ${isLightMode ? "bg-white/85 border-violet-200/70" : "bg-[#1E1F20]/80 border-white/5"}`}>
                         <h2 className="text-2xl font-bold gemini-gradient mb-4 flex items-center gap-2"><Sparkles size={24}/> About Synapse AI</h2>
-                        <p className="text-lg text-slate-300 leading-relaxed max-w-3xl">
+                        <p className={`text-lg leading-relaxed max-w-3xl ${isLightMode ? "text-slate-700" : "text-slate-300"}`}>
                             Synapse AI is a next-generation intelligent copilot powered by the advanced capabilities of Gemini 2.0 Flash Live and OpenRouter. Designed for speed, precision, and multimodal understanding, it can see what's on your screen, hear your voice in real-time, and execute complex action plans seamlessly. Synapse acts as your dedicated digital partner to accelerate your workflows and answer complex queries instantly.
                         </p>
                     </div>
 
-                    <div className="bg-[#1E1F20]/80 p-6 sm:p-8 rounded-2xl border border-white/5 shadow-xl">
+                    <div className={`p-6 sm:p-8 rounded-2xl border shadow-xl ${isLightMode ? "bg-white/85 border-violet-200/70" : "bg-[#1E1F20]/80 border-white/5"}`}>
                         <h2 className="text-2xl font-bold text-fuchsia-300 mb-4 flex items-center gap-2"><Code size={24}/> The Developer</h2>
-                        <p className="text-lg text-slate-300 leading-relaxed mb-6">
+                        <p className={`text-lg leading-relaxed mb-6 ${isLightMode ? "text-slate-700" : "text-slate-300"}`}>
                             Aryan Raikwar (also known as <strong>Aryan Zone</strong> or <strong>aaryaninvincible</strong>) is an innovative IoT & Full Stack Developer, AI Engineer, and a Tech Content Creator. Passionate about innovation and focusing on solving real-world challenges with cutting-edge technology.
                         </p>
                         <h4 className="text-lg font-semibold text-indigo-300 mb-3 flex items-center gap-2"><Activity size={18}/> Professional Background</h4>
-                        <ul className="list-disc leading-relaxed text-slate-400 ml-5 mb-6">
+                        <ul className={`list-disc leading-relaxed ml-5 mb-6 ${isLightMode ? "text-slate-600" : "text-slate-400"}`}>
                             <li><strong>IoT Development:</strong> Built scalable IoT solutions at Krishi Verse (Ouranos Robotics).</li>
                             <li><strong>Full-Stack Development:</strong> Created efficient and scalable web applications at Inocrypt Infosoft.</li>
                             <li><strong>Tech Content Creator:</strong> Over 13K+ followers on Instagram (@codesworld.exe / aaryaninvincible) with 2M+ views and 100M+ reach.</li>
                         </ul>
                         
                         <h4 className="text-lg font-semibold text-fuchsia-300 mb-3 flex items-center gap-2"><Code size={18}/> Skills & Technologies</h4>
-                        <p className="text-slate-400 mb-6 leading-relaxed bg-[#1A1A1C] p-4 rounded-xl border border-white/5">
+                        <p className={`mb-6 leading-relaxed p-4 rounded-xl border ${isLightMode ? "text-slate-600 bg-violet-50 border-violet-200/70" : "text-slate-400 bg-[#1A1A1C] border-white/5"}`}>
                             JavaScript, Python, PHP, React.js, Node.js, Flask, AI/ML, NLP, SQL, MongoDB, IoT, AWS, Shopify.
                         </p>
 
                         <h4 className="text-lg font-semibold text-emerald-300 mb-3 flex items-center gap-2"><Sparkles size={18}/> Key Projects</h4>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-8">
-                            <div className="bg-[#1A1A1C] p-3 rounded-xl border border-white/5 text-sm text-slate-400">Voltros.in E-commerce Platform</div>
-                            <div className="bg-[#1A1A1C] p-3 rounded-xl border border-white/5 text-sm text-slate-400">Smart Agriculture Device (IoT)</div>
-                            <div className="bg-[#1A1A1C] p-3 rounded-xl border border-white/5 text-sm text-slate-400">AI Career Counseling Platform</div>
-                            <div className="bg-[#1A1A1C] p-3 rounded-xl border border-white/5 text-sm text-slate-400">Open-Source Python POS System</div>
-                            <div className="bg-[#1A1A1C] p-3 rounded-xl border border-white/5 text-sm text-slate-400">React IoT Dashboard</div>
-                            <div className="bg-[#1A1A1C] p-3 rounded-xl border border-white/5 text-sm text-slate-400">2D Games: Flappy Neon, Dino Dash etc.</div>
+                            <div className={`p-3 rounded-xl border text-sm ${isLightMode ? "bg-violet-50 border-violet-200/70 text-slate-600" : "bg-[#1A1A1C] border-white/5 text-slate-400"}`}>Voltros.in E-commerce Platform</div>
+                            <div className={`p-3 rounded-xl border text-sm ${isLightMode ? "bg-violet-50 border-violet-200/70 text-slate-600" : "bg-[#1A1A1C] border-white/5 text-slate-400"}`}>Smart Agriculture Device (IoT)</div>
+                            <div className={`p-3 rounded-xl border text-sm ${isLightMode ? "bg-violet-50 border-violet-200/70 text-slate-600" : "bg-[#1A1A1C] border-white/5 text-slate-400"}`}>AI Career Counseling Platform</div>
+                            <div className={`p-3 rounded-xl border text-sm ${isLightMode ? "bg-violet-50 border-violet-200/70 text-slate-600" : "bg-[#1A1A1C] border-white/5 text-slate-400"}`}>Open-Source Python POS System</div>
+                            <div className={`p-3 rounded-xl border text-sm ${isLightMode ? "bg-violet-50 border-violet-200/70 text-slate-600" : "bg-[#1A1A1C] border-white/5 text-slate-400"}`}>React IoT Dashboard</div>
+                            <div className={`p-3 rounded-xl border text-sm ${isLightMode ? "bg-violet-50 border-violet-200/70 text-slate-600" : "bg-[#1A1A1C] border-white/5 text-slate-400"}`}>2D Games: Flappy Neon, Dino Dash etc.</div>
                         </div>
 
                         <div className="pt-6 border-t border-white/10 flex flex-wrap gap-4 items-center justify-between">
