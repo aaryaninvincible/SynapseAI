@@ -35,6 +35,14 @@ type GeminiStatus = {
   clientReady: boolean;
 };
 
+type ProviderOption = "gemini" | "claude" | "openrouter";
+
+const PROVIDER_MODELS: Record<ProviderOption, string[]> = {
+  gemini: ["gemini-2.5-flash", "gemini-2.0-flash"],
+  claude: ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"],
+  openrouter: ["google/gemini-2.0-flash-001", "anthropic/claude-3.5-sonnet"],
+};
+
 export default function App() {
   const [sessionId, setSessionId] = useState<string>("");
   const [wsState, setWsState] = useState<"idle" | "connecting" | "open">("connecting");
@@ -64,6 +72,8 @@ export default function App() {
   const [actionRunnerOn, setActionRunnerOn] = useState(false);
   const [remoteStartUrl, setRemoteStartUrl] = useState("https://example.com");
   const [voiceTypingOn, setVoiceTypingOn] = useState(false);
+  const [selectedProvider, setSelectedProvider] = useState<ProviderOption>("gemini");
+  const [selectedModel, setSelectedModel] = useState<string>(PROVIDER_MODELS.gemini[0]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -375,7 +385,11 @@ export default function App() {
       const res = await fetch(`${API_BASE}/session/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: "local-dev-user" }),
+        body: JSON.stringify({
+          user_id: user?.uid ?? "local-dev-user",
+          provider: selectedProvider,
+          model: selectedModel,
+        }),
       });
       if (!res.ok) {
         throw new Error(`Session start failed (${res.status})`);
@@ -696,6 +710,11 @@ export default function App() {
     setActiveTab("home");
     autoStartRef.current = false; // Reset to allow starting session
     void startSession();
+  };
+
+  const applyProviderModel = async () => {
+    append("system", `Switching to ${selectedProvider} (${selectedModel}) for this chat...`);
+    await newChat();
   };
 
   const loadSession = async (session: ChatSession) => {
@@ -1211,6 +1230,42 @@ export default function App() {
                       </button>
 
                       <div className="h-5 w-[1px] bg-white/10 mx-1"></div>
+
+                      <select
+                        value={selectedProvider}
+                        onChange={(e) => {
+                          const provider = e.target.value as ProviderOption;
+                          setSelectedProvider(provider);
+                          setSelectedModel(PROVIDER_MODELS[provider][0]);
+                        }}
+                        className="bg-[#17181a] border border-white/10 rounded-full px-3 py-1.5 text-xs text-slate-200 outline-none"
+                        title="Select provider"
+                      >
+                        <option value="gemini">Gemini</option>
+                        <option value="claude">Claude</option>
+                        <option value="openrouter">OpenRouter</option>
+                      </select>
+
+                      <select
+                        value={selectedModel}
+                        onChange={(e) => setSelectedModel(e.target.value)}
+                        className="bg-[#17181a] border border-white/10 rounded-full px-3 py-1.5 text-xs text-slate-200 outline-none max-w-[220px]"
+                        title="Select model"
+                      >
+                        {PROVIDER_MODELS[selectedProvider].map((model) => (
+                          <option key={model} value={model}>
+                            {model}
+                          </option>
+                        ))}
+                      </select>
+
+                      <button
+                        onClick={() => void applyProviderModel()}
+                        className="px-3 py-1.5 rounded-full text-xs border border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/10 transition-colors"
+                        title="Apply selected provider and model to a new chat"
+                      >
+                        Apply
+                      </button>
 
                       {/* Interrupt Base */}
                       <button

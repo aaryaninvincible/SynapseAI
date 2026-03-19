@@ -36,6 +36,11 @@ Set `VITE_AGENT_BASE_URL` in `apps/web/.env.local` if backend is not on `http://
 Backend env vars:
 
 - `GOOGLE_API_KEY`: Gemini key (optional in this scaffold, falls back to mock response mode).
+- `OPENROUTER_API_KEY`: optional OpenRouter key for routed fallback.
+- `ANTHROPIC_API_KEY`: optional Claude key (`provider=anthropic` or `provider=claude`).
+- `SARVAM_API_KEY`: reserved for Sarvam integration (document workflow/custom adapter).
+- `DEFAULT_LLM_PROVIDER`: default provider for new sessions (`gemini`, `openrouter`, `anthropic`).
+- `DEFAULT_LLM_MODEL`: optional model override used by selected provider.
 - `ALLOWED_ORIGINS`: comma-separated CORS origins.
 - `GEMINI_LIVE_MODEL`: defaults to `gemini-2.0-flash-live-001`.
 - `GEMINI_FALLBACK_MODEL`: defaults to `gemini-2.5-flash`.
@@ -73,9 +78,11 @@ This is a working v0 scaffold:
 - Gemini request includes latest screenshot as multimodal input when API key is configured
 - mic audio chunk streaming from browser to backend websocket
 - action plan JSON returned to frontend
+- provider/model routing per session (`/session/start` accepts `provider` and `model`)
 - explicit session end from UI
 - per-session Gemini Live connection with fallback to non-live generation
 - optional Firestore session/events persistence and optional Cloud Storage frame snapshots
+- cross-session conversational context reuse based on `user_id`
 
 Next: replace the mock branch with full Gemini Live streaming audio/video IO.
 

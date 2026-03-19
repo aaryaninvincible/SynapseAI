@@ -10,23 +10,40 @@ from .models import AgentReply
 try:
     from google import genai
     from google.genai import types
+
     HAS_GENAI = True
 except ImportError:
     HAS_GENAI = False
 
 PROMPT = """You are Synapse AI Support Copilot.
-Return concise troubleshooting guidance in plain conversational English.
-Also include a structured action plan when asked for JSON output.
+Respond in this exact structure:
+1) One short paragraph answer first.
+2) Then bullet points for actionable details.
+Keep the response complete in one turn and preserve conversation context.
 Always prefer reversible steps and ask for confirmation when uncertain.
 If asked who built you / who made you / your developer / creator identity, answer exactly: Built by Aryan."""
 
 
 class GeminiLiveAdapter:
-    def __init__(self, api_keys: list[str], openrouter_api_key: str, live_model: str, fallback_model: str) -> None:
+    def __init__(
+        self,
+        api_keys: list[str],
+        openrouter_api_key: str,
+        anthropic_api_key: str,
+        sarvam_api_key: str,
+        live_model: str,
+        fallback_model: str,
+        default_provider: str,
+        default_model: str,
+    ) -> None:
         self.api_keys = api_keys
         self.openrouter_api_key = openrouter_api_key
+        self.anthropic_api_key = anthropic_api_key
+        self.sarvam_api_key = sarvam_api_key
         self.live_model = live_model
         self.fallback_model = fallback_model
+        self.default_provider = (default_provider or "gemini").strip().lower()
+        self.default_model = default_model.strip() if default_model else ""
         self._clients: list[Any] = []
         self._current_client_idx = 0
         self._live_sessions: dict[str, Any] = {}
@@ -50,18 +67,52 @@ class GeminiLiveAdapter:
             self._current_client_idx = (self._current_client_idx + 1) % len(self._clients)
             print("Rotated Gemini client to key index:", self._current_client_idx)
 
-    async def generate(self, session_id: str, user_text: str, latest_frame: str | None = None) -> AgentReply:
+    async def generate(
+        self,
+        session_id: str,
+        user_text: str,
+        latest_frame: str | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        recent_turns: list[dict[str, str]] | None = None,
+    ) -> AgentReply:
+        selected_provider = (provider or self.default_provider or "gemini").strip().lower()
+        selected_model = (model or self.default_model or "").strip()
+        prompt_input = self._build_user_prompt(user_text=user_text, recent_turns=recent_turns or [])
+
+        if selected_provider in {"anthropic", "claude"}:
+            ret = await self._generate_anthropic(prompt_input, user_text, selected_model)
+            if ret:
+                return ret
+            return self._mock_reply(user_text, "Anthropic client not initialized. Check ANTHROPIC_API_KEY.")
+
+        if selected_provider == "openrouter":
+            ret = await self._generate_openrouter(prompt_input, user_text, latest_frame, selected_model)
+            if ret:
+                return ret
+            return self._mock_reply(user_text, "OpenRouter client not initialized. Check OPENROUTER_API_KEY.")
+
+        if selected_provider == "sarvam":
+            return self._mock_reply(
+                user_text,
+                "Sarvam text chat routing is not configured yet. Add SARVAM chat endpoint mapping first.",
+            )
+
         client = self._client
         if not client:
             if self.openrouter_api_key:
-                ret = await self._generate_openrouter(user_text, latest_frame)
+                ret = await self._generate_openrouter(prompt_input, user_text, latest_frame, selected_model)
                 if ret:
                     return ret
-            return self._mock_reply(user_text, "Gemini client not initialized. Check your GOOGLE_API_KEY inside apps/agent/.env.")
+            if self.anthropic_api_key:
+                ret = await self._generate_anthropic(prompt_input, user_text, selected_model)
+                if ret:
+                    return ret
+            return self._mock_reply(user_text, "Gemini client not initialized. Check GOOGLE_API_KEY.")
 
         live_session = await self._ensure_live_session(session_id)
         if live_session:
-            live_reply = await self._generate_from_live_session(live_session, user_text, latest_frame)
+            live_reply = await self._generate_from_live_session(live_session, prompt_input, user_text, latest_frame)
             if live_reply:
                 return live_reply
 
@@ -70,8 +121,7 @@ class GeminiLiveAdapter:
                 types.Part.from_text(
                     text=(
                         f"{PROMPT}\n\n"
-                        "User message:\n"
-                        f"{user_text}\n\n"
+                        f"{prompt_input}\n\n"
                         "You must return valid JSON."
                     )
                 )
@@ -81,7 +131,7 @@ class GeminiLiveAdapter:
                 contents.append(image_part)
 
             resp = client.models.generate_content(
-                model=self.fallback_model,
+                model=selected_model or self.fallback_model,
                 contents=contents,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
@@ -129,8 +179,11 @@ class GeminiLiveAdapter:
         except Exception as e:
             print("Generate exception:", e)
             if self.openrouter_api_key:
-                print("Falling back to OpenRouter...")
-                ret = await self._generate_openrouter(user_text, latest_frame)
+                ret = await self._generate_openrouter(prompt_input, user_text, latest_frame, selected_model)
+                if ret:
+                    return ret
+            if self.anthropic_api_key:
+                ret = await self._generate_anthropic(prompt_input, user_text, selected_model)
                 if ret:
                     return ret
             if "RESOURCE_EXHAUSTED" in str(e):
@@ -195,7 +248,7 @@ class GeminiLiveAdapter:
                 return None
 
     async def _generate_from_live_session(
-        self, live_session: Any, user_text: str, latest_frame: str | None
+        self, live_session: Any, prompt_input: str, user_text: str, latest_frame: str | None
     ) -> AgentReply | None:
         try:
             if latest_frame:
@@ -204,7 +257,7 @@ class GeminiLiveAdapter:
                     await live_session.send_realtime_input(video=image_blob)
 
             await live_session.send_client_content(
-                turns=types.Content(role="user", parts=[types.Part.from_text(text=user_text)]),
+                turns=types.Content(role="user", parts=[types.Part.from_text(text=prompt_input)]),
                 turn_complete=True,
             )
 
@@ -237,54 +290,53 @@ class GeminiLiveAdapter:
             return None
 
     def _mock_reply(self, user_text: str, error_msg: str = "") -> AgentReply:
-        # Hide technical details from user
         friendly_msg = "I'm sorry, I'm currently undergoing a quick synapse sync (maintenance). Please try again in a few minutes!"
         if "RESOURCE_EXHAUSTED" in error_msg:
-             friendly_msg = "My synapses are currently overwhelmed by high traffic. Please try again in a moment!"
-        
+            friendly_msg = "My synapses are currently overwhelmed by high traffic. Please try again in a moment!"
+
         spoken = self._apply_identity_override(user_text, friendly_msg)
         return AgentReply(spoken_text=spoken, action_plan=self._default_action_plan())
 
-    async def _generate_openrouter(self, user_text: str, latest_frame: str | None) -> AgentReply | None:
+    async def _generate_openrouter(
+        self,
+        prompt_input: str,
+        user_text: str,
+        latest_frame: str | None,
+        model: str | None,
+    ) -> AgentReply | None:
         if not self.openrouter_api_key:
             return None
-        
+
         url = "https://openrouter.ai/api/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.openrouter_api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
-        
+
         contents: list[dict[str, Any]] = [
-            {"type": "text", "text": f"{PROMPT}\n\nUser message:\n{user_text}\n\nCRITICAL: You MUST respond ONLY with a single valid JSON object. Do NOT include any conversational text before or after the JSON. Do NOT wrap in ```json blocks. Just the raw JSON object containing 'spoken_text' and 'action_plan'."}
+            {
+                "type": "text",
+                "text": (
+                    f"{PROMPT}\n\n{prompt_input}\n\n"
+                    "CRITICAL: You MUST respond ONLY with a single valid JSON object. "
+                    "Do NOT include any conversational text before or after the JSON."
+                ),
+            }
         ]
-        
+
         if latest_frame and latest_frame.startswith("data:"):
-            contents.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": latest_frame
-                }
-            })
+            contents.append({"type": "image_url", "image_url": {"url": latest_frame}})
 
         data = {
-            "model": "google/gemini-2.0-flash-001",
-            "messages": [
-                {"role": "user", "content": contents}
-            ]
+            "model": model or "google/gemini-2.0-flash-001",
+            "messages": [{"role": "user", "content": contents}],
         }
-        
-        # Also try openrouter's primary model if that fails
-        import urllib.request
-        import json
-        
-        req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers=headers, method="POST")
+
         loop = asyncio.get_running_loop()
-        
         resp_text = await loop.run_in_executor(None, self._make_openrouter_request, url, headers, data)
         if not resp_text:
             return None
-            
+
         try:
             resp_json = json.loads(resp_text)
             content = resp_json["choices"][0]["message"]["content"]
@@ -293,23 +345,94 @@ class GeminiLiveAdapter:
             spoken_text = self._apply_identity_override(user_text, spoken_text)
             return AgentReply(
                 spoken_text=spoken_text,
-                action_plan=parsed.get("action_plan", self._default_action_plan())
+                action_plan=parsed.get("action_plan", self._default_action_plan()),
             )
         except Exception as e:
             print("OpenRouter parsing error:", e)
+            return None
+
+    async def _generate_anthropic(self, prompt_input: str, user_text: str, model: str | None) -> AgentReply | None:
+        if not self.anthropic_api_key:
+            return None
+
+        url = "https://api.anthropic.com/v1/messages"
+        headers = {
+            "x-api-key": self.anthropic_api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        payload = {
+            "model": model or "claude-3-5-sonnet-latest",
+            "max_tokens": 1000,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        f"{PROMPT}\n\n{prompt_input}\n\n"
+                        "Return only a valid JSON object with keys: spoken_text and action_plan."
+                    ),
+                }
+            ],
+        }
+
+        loop = asyncio.get_running_loop()
+        resp_text = await loop.run_in_executor(None, self._make_openrouter_request, url, headers, payload)
+        if not resp_text:
+            return None
+
+        try:
+            data = json.loads(resp_text)
+            content_blocks = data.get("content", [])
+            text = ""
+            if isinstance(content_blocks, list):
+                for block in content_blocks:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text += str(block.get("text", ""))
+            if not text.strip():
+                return None
+            parsed = self._parse_or_wrap(text)
+            spoken_text = self._apply_identity_override(
+                user_text,
+                parsed.get("spoken_text", "I analyzed your request. Let's try the next step."),
+            )
+            return AgentReply(
+                spoken_text=spoken_text,
+                action_plan=parsed.get("action_plan", self._default_action_plan()),
+            )
+        except Exception as exc:
+            print("Anthropic parsing error:", exc)
             return None
 
     @staticmethod
     def _make_openrouter_request(url: str, headers: dict[str, str], data: dict[str, Any]) -> str | None:
         try:
             import urllib.request
-            import json
+
             req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers=headers, method="POST")
             with urllib.request.urlopen(req, timeout=30) as resp:
                 return resp.read().decode("utf-8")
         except Exception as e:
-            print("OpenRouter error:", e)
+            print("HTTP provider error:", e)
             return None
+
+    def _build_user_prompt(self, user_text: str, recent_turns: list[dict[str, str]]) -> str:
+        context_lines: list[str] = []
+        for item in recent_turns[-10:]:
+            role = str(item.get("role", "")).strip().lower()
+            text = str(item.get("text", "")).strip()
+            if role in {"user", "agent"} and text:
+                context_lines.append(f"{role}: {text}")
+
+        context_block = "\n".join(context_lines)
+        if context_block:
+            return (
+                "Conversation context from earlier turns:\n"
+                f"{context_block}\n\n"
+                "Current user message:\n"
+                f"{user_text}"
+            )
+
+        return f"Current user message:\n{user_text}"
 
     def _apply_identity_override(self, user_text: str, spoken_text: str) -> str:
         normalized = user_text.lower()
@@ -374,8 +497,9 @@ class GeminiLiveAdapter:
                 return self._normalize_model_payload(data)
         except Exception:
             pass
-        
+
         import re
+
         try:
             match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
             if match:
@@ -409,7 +533,11 @@ class GeminiLiveAdapter:
                 action_plan = data.get("action_plan")
                 if isinstance(action_plan, dict):
                     fallback = action_plan.get("spoken_summary")
-            spoken_text = fallback if isinstance(fallback, str) and fallback.strip() else "I analyzed your request. Let's try the next step."
+            spoken_text = (
+                fallback
+                if isinstance(fallback, str) and fallback.strip()
+                else "I analyzed your request. Let's try the next step."
+            )
 
         action_plan = data.get("action_plan")
         if not isinstance(action_plan, dict):
@@ -432,10 +560,21 @@ class GeminiLiveAdapter:
         )
 
     def status(self) -> dict[str, Any]:
+        has_gemini = bool(self.api_keys) and (self._client is not None)
+        has_openrouter = bool(self.openrouter_api_key)
+        has_claude = bool(self.anthropic_api_key)
         return {
-            "gemini_api_key_configured": bool(self.api_keys) or bool(self.openrouter_api_key),
-            "gemini_client_ready": (self._client is not None) or bool(self.openrouter_api_key),
+            "gemini_api_key_configured": bool(self.api_keys) or has_openrouter or has_claude,
+            "gemini_client_ready": has_gemini or has_openrouter or has_claude,
             "live_model": self.live_model,
             "fallback_model": self.fallback_model,
-            "mode": "gemini" if self._client is not None else ("openrouter" if self.openrouter_api_key else "mock"),
+            "default_provider": self.default_provider,
+            "default_model": self.default_model,
+            "available_providers": {
+                "gemini": has_gemini,
+                "openrouter": has_openrouter,
+                "anthropic": has_claude,
+                "sarvam": bool(self.sarvam_api_key),
+            },
+            "mode": "gemini" if has_gemini else ("openrouter" if has_openrouter else ("anthropic" if has_claude else "mock")),
         }

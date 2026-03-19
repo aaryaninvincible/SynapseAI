@@ -16,8 +16,12 @@ settings = get_settings()
 gemini = GeminiLiveAdapter(
     api_keys=settings.google_api_keys,
     openrouter_api_key=settings.openrouter_api_key,
+    anthropic_api_key=settings.anthropic_api_key,
+    sarvam_api_key=settings.sarvam_api_key,
     live_model=settings.gemini_live_model,
     fallback_model=settings.gemini_fallback_model,
+    default_provider=settings.default_provider,
+    default_model=settings.default_model,
 )
 persistence = PersistenceService(project_id=settings.gcp_project_id, bucket_name=settings.gcs_bucket_name)
 browser_automation = BrowserAutomationService(
@@ -45,6 +49,11 @@ async def health() -> dict[str, object]:
 async def start_session(body: StartSessionRequest) -> StartSessionResponse:
     session_id = str(uuid4())
     sessions.create(session_id, body.user_id)
+    sessions.set_preferences(
+        session_id,
+        provider=(body.provider or settings.default_provider),
+        model=(body.model or settings.default_model or None),
+    )
     return StartSessionResponse(session_id=session_id, ws_url=f"/ws/{session_id}")
 
 

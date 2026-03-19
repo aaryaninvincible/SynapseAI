@@ -16,6 +16,8 @@ ServerEventType = Literal["agent_text_delta", "agent_action_plan", "state_update
 
 class StartSessionRequest(BaseModel):
     user_id: str | None = None
+    provider: str | None = None
+    model: str | None = None
 
 
 class StartSessionResponse(BaseModel):

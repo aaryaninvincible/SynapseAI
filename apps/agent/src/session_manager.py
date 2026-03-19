@@ -12,6 +12,8 @@ from .persistence import PersistenceService
 @dataclass
 class SessionState:
     user_id: str | None = None
+    provider: str = "gemini"
+    model: str | None = None
     latest_frame: str | None = None
     interrupted: bool = False
     frame_count: int = 0
@@ -34,6 +36,13 @@ class SessionManager:
     def create(self, session_id: str, user_id: str | None = None) -> None:
         self.sessions[session_id] = SessionState(user_id=user_id)
         self.persistence.session_started(session_id, user_id)
+
+    def set_preferences(self, session_id: str, provider: str, model: str | None = None) -> None:
+        state = self.sessions.get(session_id)
+        if not state:
+            return
+        state.provider = (provider or "gemini").strip().lower()
+        state.model = model.strip() if isinstance(model, str) and model.strip() else None
 
     def end(self, session_id: str) -> None:
         state = self.sessions.pop(session_id, None)
@@ -159,38 +168,26 @@ class SessionManager:
                 state.interrupted = False
 
             self.persistence.append_event(session_id, "user", {"text": text})
-            reply = await self.gemini.generate(session_id=session_id, user_text=text, latest_frame=state.latest_frame)
+            recent_turns: list[dict[str, str]] = []
+            if state.user_id:
+                recent_turns = self.persistence.get_recent_user_turns(state.user_id, limit=10)
+
+            reply = await self.gemini.generate(
+                session_id=session_id,
+                user_text=text,
+                latest_frame=state.latest_frame,
+                provider=state.provider,
+                model=state.model,
+                recent_turns=recent_turns,
+            )
 
             state.timeline.append({"user_text": text, "agent_text": reply.spoken_text})
             self.persistence.append_event(
                 session_id, "agent", {"spoken_text": reply.spoken_text, "action_plan": reply.action_plan}
             )
-            for chunk in self._chunk_text(reply.spoken_text):
-                out.append(WsServerEvent(type="agent_text_delta", payload={"text": chunk}))
+            out.append(WsServerEvent(type="agent_text_delta", payload={"text": reply.spoken_text}))
             out.append(WsServerEvent(type="agent_action_plan", payload=reply.action_plan))
             return out
 
         out.append(WsServerEvent(type="error", payload={"message": f"Unsupported event type: {event_type}"}))
         return out
-
-    def _chunk_text(self, text: str) -> list[str]:
-        # Simulate streaming by splitting on sentence boundaries first, then fallback chunking.
-        stripped = text.strip()
-        if not stripped:
-            return []
-
-        parts: list[str] = []
-        for sep in [". ", "? ", "! "]:
-            if sep in stripped and not parts:
-                temp = stripped.split(sep)
-                for idx, item in enumerate(temp):
-                    item = item.strip()
-                    if not item:
-                        continue
-                    suffix = sep.strip() if idx < len(temp) - 1 else ""
-                    parts.append(f"{item}{suffix}".strip())
-        if parts:
-            return parts
-
-        size = 90
-        return [stripped[i : i + size] for i in range(0, len(stripped), size)]

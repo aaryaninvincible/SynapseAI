@@ -62,6 +62,46 @@ class PersistenceService:
             {"role": role, "payload": payload, "ts": self._utc_now()}
         )
 
+    def get_recent_user_turns(self, user_id: str, limit: int = 12) -> list[dict[str, str]]:
+        if not self._firestore or not user_id:
+            return []
+        try:
+            from google.cloud.firestore_v1.base_query import FieldFilter  # type: ignore
+            from google.cloud.firestore_v1.query import Query  # type: ignore
+
+            sessions = (
+                self._firestore.collection("sessions")
+                .where(filter=FieldFilter("user_id", "==", user_id))
+                .order_by("started_at", direction=Query.DESCENDING)
+                .limit(5)
+                .stream()
+            )
+
+            turns: list[dict[str, str]] = []
+            for session in sessions:
+                events = (
+                    self._firestore.collection("sessions")
+                    .document(session.id)
+                    .collection("events")
+                    .order_by("ts", direction=Query.ASCENDING)
+                    .stream()
+                )
+                for event in events:
+                    data = event.to_dict() or {}
+                    role = str(data.get("role", "")).strip()
+                    payload = data.get("payload", {})
+                    if role == "user":
+                        text = str((payload or {}).get("text", "")).strip()
+                    elif role == "agent":
+                        text = str((payload or {}).get("spoken_text", "")).strip()
+                    else:
+                        text = ""
+                    if role in {"user", "agent"} and text:
+                        turns.append({"role": role, "text": text})
+            return turns[-limit:]
+        except Exception:
+            return []
+
     def store_frame(self, session_id: str, frame_data_url: str, frame_index: int) -> None:
         if not self._bucket:
             return
@@ -73,4 +113,3 @@ class PersistenceService:
 
     def _utc_now(self) -> str:
         return datetime.now(tz=timezone.utc).isoformat()
-
